@@ -70,7 +70,7 @@ export default function NewReel() {
           {video ? <>Selected: <b>{video.name}</b> ({fmtSize(video.size)})</> :
             "Drag & drop a video here, or click to browse"}
         </label>
-        <input id="vid" ref={inputRef} type="file" accept="video/*,.mp4,.mov"
+        <input id="vid" ref={inputRef} type="file"
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, overflow: "hidden" }}
           onChange={e => { pick(e.target.files?.[0]); e.target.value = ""; }} />
       </div>
