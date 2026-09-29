@@ -30,6 +30,12 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def _rescan_jobs_on_startup() -> None:
+    n = jobstore.rescan()
+    log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
+
+
 @app.get("/")
 def health():
     return {"ok": True, "service": "rafiei-ai-editor", "stage": 1}

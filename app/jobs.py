@@ -79,6 +79,55 @@ def list_jobs() -> list[Job]:
         return list(_jobs.values())
 
 
+def rescan(root: Optional[Path] = None) -> int:
+    """Rebuild the in-memory registry from disk. Returns the number of jobs loaded.
+
+    A job directory is any immediate subdirectory of JOBS_ROOT with a status.json.
+    Missing fields fall back to filesystem state (raw/<file>, exports/*.mp4).
+    """
+    r = Path(root) if root else JOBS_ROOT
+    if not r.exists():
+        return 0
+    loaded = 0
+    with _lock:
+        _jobs.clear()
+        for d in sorted(p for p in r.iterdir() if p.is_dir()):
+            status_p = d / "status.json"
+            if not status_p.exists():
+                continue
+            try:
+                s = json.loads(status_p.read_text())
+            except Exception:
+                continue
+            jid = s.get("id") or d.name
+            raw_name = s.get("raw_name")
+            if not raw_name:
+                raws = sorted((d / "raw").glob("*")) if (d / "raw").exists() else []
+                raw_name = raws[0].name if raws else None
+            exports_dir = d / "exports"
+            fs_versions = sorted(p.name for p in exports_dir.glob("v*.mp4")) if exports_dir.exists() else []
+            versions = s.get("versions") or fs_versions
+            r_state = s.get("render") or {}
+            # A render marked running/queued from a previous process is stale.
+            if r_state.get("status") in ("running", "queued"):
+                r_state = {**r_state, "status": "idle", "progress": 0, "message": ""}
+            render_state = RenderState(**{
+                k: r_state.get(k, getattr(RenderState(), k))
+                for k in RenderState.__dataclass_fields__
+            })
+            job = Job(
+                id=jid,
+                dir=d,
+                raw_name=raw_name,
+                plan_name=s.get("plan_name", "plan.json"),
+                render=render_state,
+                versions=list(versions),
+            )
+            _jobs[jid] = job
+            loaded += 1
+    return loaded
+
+
 def save_raw(job: Job, filename: str, src) -> Path:
     """Stream a file-like object to raw/ in 1 MB chunks (no full-file RAM copy)."""
     filename = Path(filename).name or "raw.mp4"
