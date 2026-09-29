@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+jobs/
+proof/media/
+proof/exports/
+proof/project.mlt
+proof/captions.ass
+samples/media/
+samples/out/
+web/node_modules/
+web/dist/
+.DS_Store

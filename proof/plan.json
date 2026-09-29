@@ -1,0 +1,23 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {"width": 1080, "height": 1920, "fps": 30},
+  "source": "media/raw.mp4",
+  "segments": [
+    {"id": "s1", "in": 1.05, "out": 3.65, "zoom": {"from": 1.0, "to": 1.0}},
+    {"id": "s2", "in": 5.60, "out": 9.10, "zoom": {"from": 1.15, "to": 1.15}},
+    {"id": "s3", "in": 11.20, "out": 12.40, "zoom": {"from": 1.0, "to": 1.10}}
+  ],
+  "captions": [
+    {"start": 0.0, "end": 2.6, "text": "Most people edit reels the HARD way", "style": "emphasis"},
+    {"start": 2.6, "end": 6.1, "text": "An AI dashboard that does it for you", "style": "normal"},
+    {"start": 6.1, "end": 7.3, "text": "Follow for more", "style": "cta"}
+  ],
+  "broll": [
+    {"at": 3.8, "duration": 1.8, "file": "media/broll_dashboard.mp4", "in": 0.5}
+  ],
+  "music": {"file": "media/music.wav", "volume_db": -14,
+            "duck": [{"start": 0.0, "end": 7.3, "volume_db": -24}]},
+  "sfx": [{"at": 2.45, "file": "media/whoosh.wav", "volume_db": -3}],
+  "export": {"file": "exports/proof.mp4", "crf": 20}
+}
