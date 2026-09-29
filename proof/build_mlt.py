@@ -1,6 +1,29 @@
-"""Proof: edit plan JSON -> MLT XML (+ ASS subtitles). Render with: melt project.mlt"""
-import json, sys
+"""Proof: edit plan JSON -> MLT XML (+ ASS subtitles). Render with: melt project.mlt
+
+If the local ``melt`` was not built against ffmpeg-with-libass, its
+``avfilter.subtitles`` filter is missing and captions do not render. In
+that case we fall back to MLT's own ``subtitle`` filter and drive it from
+per-style SRT files — the same approach the engine uses.
+"""
+import json, shutil, subprocess, sys
 from xml.sax.saxutils import escape as esc
+
+
+def _has_avfilter_subtitles() -> bool:
+    m = shutil.which("melt")
+    if not m:
+        return False
+    try:
+        out = subprocess.run([m, "-query", "filter"], capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:
+        return False
+    return "avfilter.subtitles" in out
+
+
+def _srt_time(t):
+    ms = int(round(max(t, 0.0) * 1000))
+    return f"{ms // 3_600_000:02d}:{(ms // 60_000) % 60:02d}:{(ms // 1000) % 60:02d},{ms % 1000:03d}"
 
 plan = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "plan.json"))
 W, H, FPS = plan["canvas"]["width"], plan["canvas"]["height"], plan["canvas"]["fps"]
@@ -84,7 +107,44 @@ x.append(f'<tractor id="main" in="0" out="{total - 1}">'
 for b in (1, 2, 3):
     x.append(f'<transition mlt_service="mix"><property name="a_track">0</property><property name="b_track">{b}</property>'
              '<property name="always_active">1</property><property name="sum">1</property></transition>')
-x.append('<filter mlt_service="avfilter.subtitles"><property name="av.filename">captions.ass</property></filter>')
+if _has_avfilter_subtitles():
+    x.append('<filter mlt_service="avfilter.subtitles"><property name="av.filename">captions.ass</property></filter>')
+else:
+    # Fallback: MLT's own `subtitle` filter, one per style, driven by SRTs.
+    STYLE_ORDER = ["normal", "emphasis", "cta"]
+    STYLE_COLOUR = {"normal": "0xffffffff", "emphasis": "0xffd700ff", "cta": "0x00ff66ff"}
+    STYLE_SIZE = {"normal": 78, "emphasis": 92, "cta": 84}
+    from pathlib import Path as _P
+    from collections import defaultdict as _dd
+    buckets = _dd(list)
+    for c in plan["captions"]:
+        buckets[c["style"]].append(c)
+    frame = 1.0 / FPS
+    for feed_idx, name in enumerate(STYLE_ORDER):
+        cues = buckets.get(name)
+        if not cues:
+            continue
+        body = []
+        for i, c in enumerate(cues, 1):
+            end = max(c["start"] + 1e-3, c["end"] - frame)
+            body.append(f"{i}\n{_srt_time(c['start'])} --> {_srt_time(end)}\n{c['text']}\n")
+        srt_path = _P(f"captions.{name}.srt")
+        srt_path.write_text("\n".join(body), encoding="utf-8")
+        x.append(
+            f'<filter mlt_service="subtitle">'
+            f'<property name="resource">{esc(str(srt_path.resolve()))}</property>'
+            f'<property name="feed">{feed_idx}</property>'
+            f'<property name="family">DejaVu Sans</property>'
+            f'<property name="size">{STYLE_SIZE[name]}</property>'
+            f'<property name="weight">700</property>'
+            f'<property name="fgcolour">{STYLE_COLOUR[name]}</property>'
+            f'<property name="olcolour">0x000000ff</property>'
+            f'<property name="bgcolour">0x00000000</property>'
+            f'<property name="outline">6</property>'
+            f'<property name="halign">center</property><property name="valign">middle</property>'
+            f'<property name="geometry">60/1400:{W - 120}x196:100</property>'
+            f'</filter>'
+        )
 x.append('</tractor></mlt>')
 open("project.mlt", "w").write("\n".join(x) + "\n")
 print(f"project.mlt written: {total} frames = {total / FPS:.2f}s")

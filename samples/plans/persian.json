@@ -1,0 +1,16 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {"width": 1080, "height": 1920, "fps": 30},
+  "source": "../media/raw.mp4",
+  "segments": [
+    {"id": "s1", "in": 0.5, "out": 4.0, "zoom": {"from": 1.0, "to": 1.0}}
+  ],
+  "captions": [
+    {"start": 0.0, "end": 3.5, "text": "این ویدیو رو ببین", "style": "emphasis"}
+  ],
+  "broll": [],
+  "music": null,
+  "sfx": [],
+  "export": {"file": "out_persian.mp4", "crf": 23}
+}

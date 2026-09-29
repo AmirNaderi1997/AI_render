@@ -116,18 +116,24 @@ def _srt_text(text: str) -> str:
 
 
 def build_srts(plan: Plan) -> Dict[str, str]:
-    """Return {style_name: srt_body} for every style that has cues."""
+    """Return {style_name: srt_body} for every style that has cues.
+
+    Each cue's end is shortened by 1 frame (1/fps) so back-to-back cues,
+    even across different SRT feeds, never paint on the same frame.
+    """
     buckets: Dict[str, List[Caption]] = {name: [] for name in STYLE_NAMES}
     for c in plan.captions:
         buckets.setdefault(c.style, []).append(c)
 
+    frame = 1.0 / float(plan.canvas.fps)
     out: Dict[str, str] = {}
     for name, cues in buckets.items():
         if not cues:
             continue
         parts: List[str] = []
         for i, c in enumerate(cues, 1):
-            parts.append(f"{i}\n{srt_time(c.start)} --> {srt_time(c.end)}\n{_srt_text(c.text)}\n")
+            end = max(c.start + 1e-3, c.end - frame)
+            parts.append(f"{i}\n{srt_time(c.start)} --> {srt_time(end)}\n{_srt_text(c.text)}\n")
         out[name] = "\n".join(parts)
     return out
 

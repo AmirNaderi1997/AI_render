@@ -11,9 +11,14 @@ samples/plans/captions*.srt
 samples/plans/captions.ass
 samples/plans/project.mlt
 samples/plans/project.kdenlive
+samples/plans/*.png
 proof/exports/
 proof/media/
 proof/project.mlt
+proof/captions*.srt
+proof/captions.ass
+proof/proof_out.mp4
+proof/*.png
 .DS_Store
 *.egg-info/
 .pytest_cache/
