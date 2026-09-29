@@ -5,6 +5,7 @@ plan.json, project.mlt, captions.ass, status.json.
 """
 from __future__ import annotations
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -78,9 +79,12 @@ def list_jobs() -> list[Job]:
         return list(_jobs.values())
 
 
-def save_raw(job: Job, filename: str, data: bytes) -> Path:
+def save_raw(job: Job, filename: str, src) -> Path:
+    """Stream a file-like object to raw/ in 1 MB chunks (no full-file RAM copy)."""
+    filename = Path(filename).name or "raw.mp4"
     dst = job.dir / "raw" / filename
-    dst.write_bytes(data)
+    with open(dst, "wb") as out:
+        shutil.copyfileobj(src, out, 1024 * 1024)
     job.raw_name = filename
     _write_status(job)
     return dst

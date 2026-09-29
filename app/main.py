@@ -4,6 +4,7 @@ Run: uvicorn app.main:app --reload --port 8000
 """
 from __future__ import annotations
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,8 @@ from engine.kdenlive import open_in_kdenlive
 from engine.schema import validate_plan
 from . import jobs as jobstore
 
+
+log = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Rafiei AI Editor", version="0.1.0")
 
@@ -44,14 +47,22 @@ async def create_job(
     plan_text: Optional[str] = Form(None),
 ):
     job = jobstore.create_job()
-    data = await video.read()
-    jobstore.save_raw(job, video.filename or "raw.mp4", data)
+    try:
+        # UploadFile is a spooled temp file: stream it to disk, never .read() it whole.
+        jobstore.save_raw(job, video.filename or "raw.mp4", video.file)
+    except Exception as e:
+        log.exception("upload failed for %r", video.filename)
+        raise HTTPException(500, f"Could not save upload: {e}")
 
     plan_data: Optional[dict] = None
-    if plan is not None:
-        plan_data = json.loads((await plan.read()).decode("utf-8"))
-    elif plan_text:
-        plan_data = json.loads(plan_text)
+    try:
+        if plan is not None:
+            plan_data = json.loads((await plan.read()).decode("utf-8"))
+        elif plan_text:
+            plan_data = json.loads(plan_text)
+    except ValueError as e:
+        log.warning("invalid plan JSON: %s", e)
+        raise HTTPException(422, f"Plan is not valid JSON: {e}")
 
     errors: list[str] = []
     if plan_data is not None:

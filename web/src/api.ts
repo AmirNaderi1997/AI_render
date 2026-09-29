@@ -14,7 +14,12 @@ export interface Job {
 }
 
 async function j<T>(r: Response): Promise<T> {
-  if (!r.ok) throw new Error(await r.text());
+  if (!r.ok) {
+    const t = await r.text();
+    let msg = t;
+    try { const d = JSON.parse(t).detail; msg = typeof d === "string" ? d : JSON.stringify(d); } catch { /* raw text */ }
+    throw new Error(`${r.status} ${msg}`);
+  }
   return r.json();
 }
 
