@@ -1,0 +1,35 @@
+# Rafiei Reel Style — caption look and render defaults used by the engine.
+# Colours are #RRGGBB (alpha optional as #RRGGBBAA, 00 = opaque).
+name: Rafiei Reel Style
+captions:
+  # Fonts are looked up by family name via fontconfig/CoreText; put extra .ttf/.otf files in `fonts_dir`.
+  # For Persian captions install Vazirmatn and set font: Vazirmatn.
+  fonts_dir: presets/fonts
+  base:
+    font: Arial
+    size: 78
+    bold: true
+    colour: "#FFFFFF"
+    outline_colour: "#000000"
+    outline: 6
+    shadow: 0
+    margin_bottom: 520     # px from the bottom edge (keeps text above the reel UI)
+    margin_sides: 60
+  styles:
+    normal: {}
+    emphasis:
+      colour: "#FFD700"
+      size: 92
+    cta:
+      colour: "#00FF66"
+      size: 84
+render:
+  crf: 20
+  preset: medium
+  audio_bitrate: 192k
+  preview_scale: 0.5       # 1080x1920 -> 540x960
+  loudness_lufs: -14
+music:
+  fade_out: 0.8            # seconds
+zoom:
+  punch_frames: 6          # 0.2 s at 30 fps

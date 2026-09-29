@@ -1,0 +1,16 @@
+[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, Bold, BorderStyle, Outline, Alignment, MarginV
+Style: normal,DejaVu Sans,78,&H00FFFFFF,&H00000000,1,1,6,2,520
+Style: emphasis,DejaVu Sans,78,&H0000D7FF,&H00000000,1,1,6,2,520
+Style: cta,DejaVu Sans,78,&H0000FF00,&H00000000,1,1,6,2,520
+
+[Events]
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:02.60,emphasis,Most people edit reels the HARD way
+Dialogue: 0,0:00:02.60,0:00:06.10,normal,An AI dashboard that does it for you
+Dialogue: 0,0:00:06.10,0:00:07.30,cta,Follow for more

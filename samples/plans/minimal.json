@@ -1,0 +1,13 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {"width": 1080, "height": 1920, "fps": 30},
+  "source": "raw.mp4",
+  "segments": [
+    {"id": "s1", "in": 0.0, "out": 4.0}
+  ],
+  "captions": [],
+  "broll": [],
+  "sfx": [],
+  "export": {"file": "out_min.mp4"}
+}

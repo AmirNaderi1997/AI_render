@@ -1,0 +1,26 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {"width": 1080, "height": 1920, "fps": 30},
+  "source": "../media/raw.mp4",
+  "segments": [
+    {"id": "s1", "in": 0.5, "out": 3.0, "zoom": {"from": 1.0, "to": 1.0}},
+    {"id": "s2", "in": 4.0, "out": 7.0, "zoom": {"from": 1.15, "to": 1.15}},
+    {"id": "s3", "in": 8.0, "out": 10.0, "zoom": {"from": 1.0, "to": 1.10}}
+  ],
+  "captions": [
+    {"start": 0.0, "end": 2.5, "text": "Test caption one", "style": "emphasis"},
+    {"start": 2.5, "end": 5.5, "text": "Test caption two", "style": "normal"},
+    {"start": 5.5, "end": 7.5, "text": "Follow for more", "style": "cta"}
+  ],
+  "broll": [
+    {"at": 3.0, "duration": 1.5, "file": "../media/broll.mp4", "in": 0.5}
+  ],
+  "music": {
+    "file": "../media/music.wav",
+    "volume_db": -14,
+    "duck": [{"start": 0.0, "end": 5.0, "volume_db": -24}]
+  },
+  "sfx": [{"at": 2.5, "file": "../media/whoosh.wav", "volume_db": -3}],
+  "export": {"file": "out.mp4", "crf": 23}
+}
