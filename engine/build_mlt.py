@@ -61,9 +61,13 @@ def build(
         f'display_aspect_den="16" progressive="1" colorspace="709"/>',
     ]
 
+    # Filter B-roll to entries whose file actually exists on disk
+    valid_broll = [(i, b) for i, b in enumerate(plan.broll)
+                   if Path(resolve(b.file)).exists()]
+
     # --- producers OUTSIDE any playlist (proof gotcha) ---
     x.append(f'<producer id="raw"><property name="resource">{esc(resolve(plan.source))}</property></producer>')
-    for i, b in enumerate(plan.broll):
+    for i, b in valid_broll:
         x.append(f'<producer id="broll{i}"><property name="resource">{esc(resolve(b.file))}</property></producer>')
     if plan.music:
         x.append(f'<producer id="music"><property name="resource">{esc(resolve(plan.music.file))}</property></producer>')
@@ -91,10 +95,10 @@ def build(
         total += n
     x.append('</playlist>')
 
-    # V2: B-roll track
+    # V2: B-roll track (skip entries whose file doesn't exist)
     x.append('<playlist id="v2">')
     pos = 0
-    for i, b in enumerate(plan.broll):
+    for i, b in valid_broll:
         at, dur = f(b.at), f(b.duration)
         if at > pos:
             x.append(f'<blank length="{at - pos}"/>')

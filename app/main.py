@@ -38,7 +38,7 @@ def _rescan_jobs_on_startup() -> None:
 
 @app.get("/")
 def health():
-    return {"ok": True, "service": "rafiei-ai-editor", "stage": 1}
+    return {"ok": True, "service": "rafiei-ai-editor", "stage": 2}
 
 
 @app.get("/jobs")
@@ -86,6 +86,9 @@ def get_job(job_id: str):
     plan_path = job.dir / "plan.json"
     if plan_path.exists():
         d["plan"] = json.loads(plan_path.read_text())
+    transcript_path = job.dir / "transcript.json"
+    if transcript_path.exists():
+        d["has_transcript"] = True
     return d
 
 
@@ -111,6 +114,59 @@ def validate(job_id: str, body: PlanBody):
         raise HTTPException(404, "job not found")
     _, errors = validate_plan(body.plan, base_dir=job.dir, check_media=True)
     return {"ok": not errors, "errors": errors}
+
+
+class GenerateBody(BaseModel):
+    style: str = "rafiei_reel"
+    instruction: str = ""
+    whisper_model: Optional[str] = None
+    language: Optional[str] = None
+
+
+@app.post("/jobs/{job_id}/generate-plan")
+def generate_plan(job_id: str, body: GenerateBody = GenerateBody()):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not job.raw_name:
+        raise HTTPException(400, "no raw video uploaded")
+    jobstore.start_generate(
+        job,
+        style=body.style,
+        instruction=body.instruction,
+        whisper_model=body.whisper_model,
+        language=body.language,
+    )
+    return {"status": job.generate.status, "stage": job.generate.stage}
+
+
+@app.get("/jobs/{job_id}/generate-plan/status")
+def generate_status(job_id: str):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    g = job.generate
+    return {
+        "status": g.status,
+        "stage": g.stage,
+        "message": g.message,
+        "cost_usd": g.cost_usd,
+        "input_tokens": g.input_tokens,
+        "output_tokens": g.output_tokens,
+        "model": g.model,
+    }
+
+
+@app.get("/jobs/{job_id}/transcript")
+def get_transcript(job_id: str):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    p = job.dir / "transcript.json"
+    if not p.exists():
+        raise HTTPException(404, "transcript not generated yet")
+    import json
+    return json.loads(p.read_text())
 
 
 @app.post("/jobs/{job_id}/render")

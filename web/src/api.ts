@@ -9,8 +9,26 @@ export interface Job {
     status: string; progress: number; message: string;
     output?: string; preview: boolean;
   };
+  generate: {
+    status: string; stage: string; message: string;
+    cost_usd: number; input_tokens: number; output_tokens: number; model: string;
+  };
   versions: string[];
   plan?: any;
+  has_transcript?: boolean;
+}
+
+export interface Transcript {
+  file_hash: string;
+  language: string;
+  duration: number;
+  words: { w: string; start: number; end: number; prob: number }[];
+  sentences: { text: string; start: number; end: number }[];
+}
+
+export interface GenerateStatus {
+  status: string; stage: string; message: string;
+  cost_usd: number; input_tokens: number; output_tokens: number; model: string;
 }
 
 async function j<T>(r: Response): Promise<T> {
@@ -50,6 +68,21 @@ export const api = {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ plan }),
     }));
+  },
+  async generatePlan(id: string, opts?: {
+    style?: string; instruction?: string;
+    whisper_model?: string; language?: string;
+  }): Promise<{ status: string; stage: string }> {
+    return j(await fetch(`${BASE}/jobs/${id}/generate-plan`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(opts || {}),
+    }));
+  },
+  async generateStatus(id: string): Promise<GenerateStatus> {
+    return j(await fetch(`${BASE}/jobs/${id}/generate-plan/status`));
+  },
+  async getTranscript(id: string): Promise<Transcript> {
+    return j(await fetch(`${BASE}/jobs/${id}/transcript`));
   },
   async render(id: string, preview: boolean): Promise<{ status: string }> {
     return j(await fetch(`${BASE}/jobs/${id}/render?preview=${preview}`, { method: "POST" }));

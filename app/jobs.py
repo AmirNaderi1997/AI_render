@@ -35,12 +35,26 @@ class RenderState:
 
 
 @dataclass
+class GenerateState:
+    status: str = "idle"          # idle | running | done | error
+    stage: str = ""               # transcribing | detecting_pauses | planning | validating
+    message: str = ""
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+
+
+@dataclass
 class Job:
     id: str
     dir: Path
     raw_name: Optional[str] = None
     plan_name: str = "plan.json"
     render: RenderState = field(default_factory=RenderState)
+    generate: GenerateState = field(default_factory=GenerateState)
     versions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -115,12 +129,20 @@ def rescan(root: Optional[Path] = None) -> int:
                 k: r_state.get(k, getattr(RenderState(), k))
                 for k in RenderState.__dataclass_fields__
             })
+            g_state = s.get("generate") or {}
+            if g_state.get("status") == "running":
+                g_state = {**g_state, "status": "idle", "stage": "", "message": ""}
+            gen_state = GenerateState(**{
+                k: g_state.get(k, getattr(GenerateState(), k))
+                for k in GenerateState.__dataclass_fields__
+            })
             job = Job(
                 id=jid,
                 dir=d,
                 raw_name=raw_name,
                 plan_name=s.get("plan_name", "plan.json"),
                 render=render_state,
+                generate=gen_state,
                 versions=list(versions),
             )
             _jobs[jid] = job
@@ -160,6 +182,105 @@ def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> Non
                              started_at=time.time())
     _write_status(job)
     threading.Thread(target=_run_job, args=(job, preview, loudnorm), daemon=True).start()
+
+
+def start_generate(
+    job: Job,
+    style: str = "rafiei_reel",
+    instruction: str = "",
+    whisper_model: Optional[str] = None,
+    language: Optional[str] = None,
+) -> None:
+    if job.generate.status == "running":
+        return
+    job.generate = GenerateState(status="running", stage="transcribing",
+                                  started_at=time.time())
+    _write_status(job)
+    threading.Thread(
+        target=_run_generate,
+        args=(job, style, instruction, whisper_model, language),
+        daemon=True,
+    ).start()
+
+
+def _run_generate(
+    job: Job,
+    style: str,
+    instruction: str,
+    whisper_model: Optional[str],
+    language: Optional[str],
+) -> None:
+    import os
+    from brain.transcribe import transcribe
+    from brain.silence import detect_pauses
+    from brain.planner import generate_plan
+
+    try:
+        raw_path = job.dir / "raw" / job.raw_name
+        if not raw_path.exists():
+            raise FileNotFoundError(f"raw video not found: {raw_path}")
+
+        # 1. Transcribe
+        job.generate.stage = "transcribing"
+        job.generate.message = "running whisper…"
+        _write_status(job)
+
+        wm = whisper_model or os.getenv("WHISPER_MODEL", "small")
+        transcript = transcribe(raw_path, job.dir, model_size=wm, language=language)
+
+        # 2. Detect pauses
+        job.generate.stage = "detecting_pauses"
+        job.generate.message = "detecting pauses…"
+        _write_status(job)
+
+        pauses = detect_pauses(raw_path, transcript["words"], preset=style)
+
+        # 3. Plan with LLM
+        job.generate.stage = "planning"
+        job.generate.message = "asking LLM to build edit plan…"
+        _write_status(job)
+
+        source_rel = f"raw/{job.raw_name}"
+        plan_data, usage = generate_plan(
+            job_dir=job.dir,
+            transcript=transcript,
+            keep_ranges=pauses["keep"],
+            remove_ranges=pauses["remove"],
+            source_rel=source_rel,
+            preset_name=style,
+            instruction=instruction,
+            on_progress=lambda msg: _gen_progress(job, msg),
+        )
+
+        # 4. Validate and save
+        job.generate.stage = "validating"
+        job.generate.message = "validating plan…"
+        _write_status(job)
+
+        (job.dir / "plan.json").write_text(
+            json.dumps(plan_data, indent=2, ensure_ascii=False)
+        )
+
+        job.generate.status = "done"
+        job.generate.stage = ""
+        job.generate.message = "plan generated"
+        job.generate.cost_usd = round(usage.cost_estimate, 6)
+        job.generate.input_tokens = usage.input_tokens
+        job.generate.output_tokens = usage.output_tokens
+        job.generate.model = usage.model
+        job.generate.finished_at = time.time()
+        _write_status(job)
+
+    except Exception as e:
+        job.generate.status = "error"
+        job.generate.message = str(e)
+        job.generate.finished_at = time.time()
+        _write_status(job)
+
+
+def _gen_progress(job: Job, msg: str) -> None:
+    job.generate.message = msg
+    _write_status(job)
 
 
 def _run_job(job: Job, preview: bool, loudnorm: bool = False) -> None:

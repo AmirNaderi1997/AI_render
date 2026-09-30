@@ -20,6 +20,7 @@ proof/captions*.srt
 proof/captions.ass
 proof/proof_out.mp4
 proof/*.png
+.env
 .DS_Store
 *.egg-info/
 .pytest_cache/

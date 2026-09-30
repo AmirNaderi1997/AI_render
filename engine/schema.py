@@ -60,6 +60,7 @@ class Broll(BaseModel):
     duration: float = Field(gt=0.0)
     file: str
     in_: float = Field(alias="in", default=0.0, ge=0.0)
+    query: Optional[str] = None
 
     model_config = {"populate_by_name": True}
 
@@ -148,7 +149,8 @@ def validate_plan(data: dict, base_dir: Optional[Path] = None, check_media: bool
 
         files = [("source", plan.source)]
         for i, b in enumerate(plan.broll):
-            files.append((f"broll[{i}].file", b.file))
+            if not b.query:
+                files.append((f"broll[{i}].file", b.file))
         if plan.music:
             files.append(("music.file", plan.music.file))
         for i, s in enumerate(plan.sfx):
