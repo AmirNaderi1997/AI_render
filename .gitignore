@@ -7,6 +7,7 @@ web/dist/
 jobs/
 samples/media/
 samples/plans/out*.mp4
+samples/plans/kdenlive_check.mp4
 samples/plans/captions*.srt
 samples/plans/captions.ass
 samples/plans/project.mlt

@@ -92,12 +92,19 @@ See [plan.md](plan.md) for the schema. Times in `segments` are on the **raw** ti
 
 ## Kdenlive
 
-`POST /jobs/{id}/open-kdenlive` opens the generated `project.mlt` in Kdenlive.
+`POST /jobs/{id}/open-kdenlive` builds and opens a companion `project.kdenlive`
+from `project.mlt`. The sample project can be regenerated with:
 
-- **macOS:** we call `open -a Kdenlive project.mlt` (the app bundle is auto-detected).
-- **Linux:** we call `kdenlive project.mlt`.
+```bash
+python -m engine build samples/plans/full.json
+python -c "from engine.kdenlive import build_kdenlive; build_kdenlive('samples/plans/project.mlt')"
+```
 
-Verified path: plain `.mlt` opens with V1 (kept segments), V2 (B-roll), A1 (music), A2 (SFX) all visible, captions rendered via `avfilter.subtitles`. If a session needs richer Kdenlive metadata (track colours, guide markers, etc.), extend `engine/kdenlive.py`.
+The Kdenlive project contains four editable tracks: V1 raw cuts and zoom, V2
+B-roll, A1 music with volume keyframes, and A2 SFX. The rendered MP4 has
+captions; the Kdenlive project leaves caption ASS/SRT sidecars for manual
+import because a native subtitle lane has not been verified. See
+[the format notes](docs/kdenlive-format.md) and [source fixtures](samples/reference/README.md).
 
 ## Done-when checklist
 
