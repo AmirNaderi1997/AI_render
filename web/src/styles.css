@@ -70,6 +70,9 @@ video { max-width: 100%; border-radius: 6px; background: black; }
 .tw { cursor: pointer; padding: 2px 1px; border-radius: 3px; transition: background 0.15s; }
 .tw:hover { background: rgba(79,140,255,0.25); }
 .tw-removed { text-decoration: line-through; opacity: 0.4; }
+.tw-low { background: rgba(246,201,69,0.24); }
+.tw-reviewed { border-bottom: 2px solid var(--ok); }
+.tw-auto-corrected { border-bottom: 2px dashed var(--accent); background: rgba(79,140,255,0.12); }
 
 /* Visual editor */
 .visual-editor h3 { margin: 12px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }

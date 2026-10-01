@@ -90,6 +90,27 @@ jobs/      runtime job folders (gitignored)
 
 See [plan.md](plan.md) for the schema. Times in `segments` are on the **raw** timeline; caption / broll / sfx / music-duck times are on the **output** timeline (the concatenation of kept segments).
 
+## AI plan and transcript review
+
+New AI plans use Edit Plan v0.2. `visual_effects` assigns one catalog preset to a
+segment by ID. The catalog has 100 presets (ten bounded framing motions times ten
+light treatments); `/effects` lists them. Old plans without `visual_effects` still
+use their per-segment `zoom`. The Plan Review page lets you change a segment's
+effect. Automatic choices stay centered unless shot framing has been reviewed.
+
+New Persian jobs default to the local faster-whisper `medium` model and explicit
+`fa`. New Reel also accepts speech terms and an alternate model/language. A raw
+transcript candidate is cached by video hash, model, language, decoding settings,
+and speech terms. In Plan Review, select a word to correct its text or timing,
+save those corrections, then regenerate the plan from the reviewed transcript.
+"Re-transcribe only" creates another candidate without calling the plan model or
+changing the existing plan. Raw ASR candidates and corrections are kept separately
+under the job directory. Low-confidence words and captions that need audio review
+are flagged; final render asks for confirmation that marked captions were checked.
+
+ASR confidence is not proof of the spoken wording. Review disputed words against
+the source audio, especially before final export.
+
 ## Kdenlive
 
 `POST /jobs/{id}/open-kdenlive` builds and opens a companion `project.kdenlive`

@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from brain.silence import word_gap_ranges, merge_ranges, _invert, detect_pauses
-from brain.planner import source_to_output_time, output_to_source_time, generate_plan
+from brain.planner import source_to_output_time, output_to_source_time, generate_plan, _caption_review, _ensure_visual_effects
 from brain.llm import LLMUsage, _extract_json, chat_json
 
 
@@ -164,6 +164,8 @@ def test_planner_generates_valid_plan(tmp_path):
 
     assert plan["segments"][0]["id"] == "s1"
     assert len(plan["captions"]) == 2
+    assert len(plan["visual_effects"]) == len(plan["segments"])
+    assert plan["visual_effects"][0]["type"] == "steady__neutral"
     assert usage.input_tokens == 1000
 
 
@@ -237,6 +239,31 @@ def test_caption_times_in_output_timeline():
         assert cap["start"] >= 0
         assert cap["end"] <= out_dur + 0.01
         assert cap["end"] > cap["start"]
+
+
+def test_caption_review_flags_unsupported_text_and_low_confidence():
+    transcript = {"words": [
+        {"w": "محصول", "start": 0.0, "end": 0.4, "prob": 0.95},
+        {"w": "رو", "start": 0.4, "end": 0.7, "prob": 0.4},
+    ]}
+    plan = {"segments": [{"id": "s1", "in": 0.0, "out": 1.0}],
+            "captions": [{"start": 0.0, "end": 0.8, "text": "محصول رو"}]}
+    assert _caption_review(plan, transcript)[0]["reason"] == "low_confidence"
+    transcript["words"][1]["reviewed"] = True
+    assert _caption_review(plan, transcript) == []
+    plan["captions"][0]["text"] = "خدمات ندارم"
+    assert _caption_review(plan, transcript)[0]["reason"] == "text_mismatch"
+
+
+def test_effect_planner_fills_missing_and_flags_framing():
+    plan = {"segments": [
+        {"id": "s1", "in": 0, "out": 1},
+        {"id": "s2", "in": 1, "out": 2},
+        {"id": "s3", "in": 2, "out": 3},
+    ], "visual_effects": [{"segment_id": "s1", "type": "pan_left__neutral"}]}
+    _ensure_visual_effects(plan)
+    assert len(plan["visual_effects"]) == 3
+    assert plan["effect_review"] == [{"segment_id": "s1", "reason": "check_subject_framing"}]
 
 
 # ---- jarvis / openai_compatible provider ----

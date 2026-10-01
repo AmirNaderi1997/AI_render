@@ -42,6 +42,18 @@ class Segment(BaseModel):
         return self.out - self.in_
 
 
+class VisualEffect(BaseModel):
+    segment_id: str
+    type: str
+
+    @field_validator("type")
+    @classmethod
+    def _known_effect(cls, value: str) -> str:
+        from .effects import canonical_effect
+        return canonical_effect(value)
+
+
+
 class Caption(BaseModel):
     start: float = Field(ge=0.0)
     end: float = Field(ge=0.0)
@@ -100,6 +112,7 @@ class EditPlan(BaseModel):
     canvas: Canvas
     source: str
     segments: List[Segment]
+    visual_effects: List[VisualEffect] = []
     captions: List[Caption] = []
     broll: List[Broll] = []
     music: Optional[Music] = None
@@ -112,6 +125,19 @@ class EditPlan(BaseModel):
         if not v:
             raise ValueError("segments must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _effects_match_segments(self):
+        ids = [s.id for s in self.segments]
+        if len(ids) != len(set(ids)):
+            raise ValueError("segment ids must be unique")
+        effect_ids = [e.segment_id for e in self.visual_effects]
+        if len(effect_ids) != len(set(effect_ids)):
+            raise ValueError("one visual effect per segment is allowed")
+        unknown = set(effect_ids) - set(ids)
+        if unknown:
+            raise ValueError(f"visual effect references unknown segments: {sorted(unknown)}")
+        return self
 
     @property
     def output_duration(self) -> float:

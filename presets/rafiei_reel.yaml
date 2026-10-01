@@ -57,3 +57,7 @@ broll:
 sfx:
   whoosh_on_broll: true
   whoosh_volume_db: -3
+correction:
+  low_prob_threshold: 0.60       # flag ASR words below this probability
+  auto_apply_min_confidence: 0.85  # auto-apply LLM fix when LLM confidence >= this
+  max_flagged_ratio: 0.40          # skip LLM call if more than this fraction of words are flagged

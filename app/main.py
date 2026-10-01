@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from engine.kdenlive import open_in_kdenlive
 from engine.schema import validate_plan
+from engine.effects import catalog_for_api
 from . import jobs as jobstore
 
 
@@ -44,6 +45,11 @@ def health():
 @app.get("/jobs")
 def list_jobs():
     return [j.to_dict() for j in jobstore.list_jobs()]
+
+
+@app.get("/effects")
+def list_effects():
+    return catalog_for_api()
 
 
 @app.post("/jobs")
@@ -120,7 +126,10 @@ class GenerateBody(BaseModel):
     style: str = "rafiei_reel"
     instruction: str = ""
     whisper_model: Optional[str] = None
-    language: Optional[str] = None
+    language: Optional[str] = "fa"
+    use_saved_transcript: bool = False
+    transcribe_only: bool = False
+    transcription_hint: str = ""
 
 
 @app.post("/jobs/{job_id}/generate-plan")
@@ -136,6 +145,9 @@ def generate_plan(job_id: str, body: GenerateBody = GenerateBody()):
         instruction=body.instruction,
         whisper_model=body.whisper_model,
         language=body.language,
+        use_saved_transcript=body.use_saved_transcript,
+        transcribe_only=body.transcribe_only,
+        transcription_hint=body.transcription_hint,
     )
     return {"status": job.generate.status, "stage": job.generate.stage}
 
@@ -165,8 +177,35 @@ def get_transcript(job_id: str):
     p = job.dir / "transcript.json"
     if not p.exists():
         raise HTTPException(404, "transcript not generated yet")
-    import json
-    return json.loads(p.read_text())
+    from brain.transcribe import effective_transcript
+    return effective_transcript(job.dir)
+
+
+class WordCorrection(BaseModel):
+    index: int
+    text: str
+    start: Optional[float] = None
+    end: Optional[float] = None
+
+
+class CorrectionsBody(BaseModel):
+    base_key: str
+    words: list[WordCorrection]
+
+
+@app.put("/jobs/{job_id}/transcript/corrections")
+def put_transcript_corrections(job_id: str, body: CorrectionsBody):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not (job.dir / "transcript.json").exists():
+        raise HTTPException(404, "transcript not generated yet")
+    from brain.transcribe import save_corrections
+    try:
+        return save_corrections(job.dir, body.base_key,
+                                [item.model_dump() for item in body.words])
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/jobs/{job_id}/render")

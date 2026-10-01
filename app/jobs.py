@@ -190,6 +190,9 @@ def start_generate(
     instruction: str = "",
     whisper_model: Optional[str] = None,
     language: Optional[str] = None,
+    use_saved_transcript: bool = False,
+    transcribe_only: bool = False,
+    transcription_hint: str = "",
 ) -> None:
     if job.generate.status == "running":
         return
@@ -198,7 +201,8 @@ def start_generate(
     _write_status(job)
     threading.Thread(
         target=_run_generate,
-        args=(job, style, instruction, whisper_model, language),
+        args=(job, style, instruction, whisper_model, language, use_saved_transcript,
+              transcribe_only, transcription_hint),
         daemon=True,
     ).start()
 
@@ -209,9 +213,12 @@ def _run_generate(
     instruction: str,
     whisper_model: Optional[str],
     language: Optional[str],
+    use_saved_transcript: bool,
+    transcribe_only: bool,
+    transcription_hint: str,
 ) -> None:
     import os
-    from brain.transcribe import transcribe
+    from brain.transcribe import transcribe, effective_transcript, file_hash
     from brain.silence import detect_pauses
     from brain.planner import generate_plan
 
@@ -225,17 +232,36 @@ def _run_generate(
         job.generate.message = "running whisper…"
         _write_status(job)
 
-        wm = whisper_model or os.getenv("WHISPER_MODEL", "small")
-        transcript = transcribe(raw_path, job.dir, model_size=wm, language=language)
+        if use_saved_transcript:
+            transcript = effective_transcript(job.dir)
+            if transcript["file_hash"] != file_hash(raw_path):
+                raise ValueError("saved transcript belongs to another video")
+        else:
+            wm = whisper_model or os.getenv("WHISPER_MODEL")
+            transcript = transcribe(raw_path, job.dir, model_size=wm, language=language,
+                                    initial_prompt=transcription_hint)
 
-        # 2. Detect pauses
+        # 2. Auto-correct transcript (best-effort; never breaks the pipeline)
+        if not use_saved_transcript:
+            _run_auto_correct(job, transcript, style)
+            transcript = _reload_transcript(job)
+
+        if transcribe_only:
+            job.generate.status = "done"
+            job.generate.stage = ""
+            job.generate.message = "transcript generated; plan unchanged"
+            job.generate.finished_at = time.time()
+            _write_status(job)
+            return
+
+        # 4. Detect pauses
         job.generate.stage = "detecting_pauses"
         job.generate.message = "detecting pauses…"
         _write_status(job)
 
         pauses = detect_pauses(raw_path, transcript["words"], preset=style)
 
-        # 3. Plan with LLM
+        # 5. Plan with LLM
         job.generate.stage = "planning"
         job.generate.message = "asking LLM to build edit plan…"
         _write_status(job)
@@ -252,14 +278,18 @@ def _run_generate(
             on_progress=lambda msg: _gen_progress(job, msg),
         )
 
-        # 4. Validate and save
+        # 6. Validate and save
         job.generate.stage = "validating"
         job.generate.message = "validating plan…"
         _write_status(job)
 
-        (job.dir / "plan.json").write_text(
-            json.dumps(plan_data, indent=2, ensure_ascii=False)
-        )
+        plan_path = job.dir / "plan.json"
+        if plan_path.exists():
+            history = job.dir / "plans"
+            history.mkdir(exist_ok=True)
+            backup = history / f"plan-{int(time.time() * 1000)}.json"
+            backup.write_bytes(plan_path.read_bytes())
+        plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
 
         job.generate.status = "done"
         job.generate.stage = ""
@@ -281,6 +311,69 @@ def _run_generate(
 def _gen_progress(job: Job, msg: str) -> None:
     job.generate.message = msg
     _write_status(job)
+
+
+def _reload_transcript(job: Job) -> dict:
+    from brain.transcribe import effective_transcript
+    try:
+        return effective_transcript(job.dir)
+    except Exception:
+        return {}
+
+
+def _run_auto_correct(job: Job, transcript: dict, style: str) -> None:
+    """Auto-correct transcript with LLM. Saves corrections.json and applies high-confidence fixes."""
+    import yaml
+    from engine.schema import PROJECT_ROOT
+    from brain.correct import auto_correct, load_glossary
+    from brain.transcribe import save_corrections
+
+    if not transcript.get("words"):
+        return
+
+    job.generate.stage = "correcting"
+    job.generate.message = "auto-correcting transcript…"
+    _write_status(job)
+
+    try:
+        preset_path = PROJECT_ROOT / "presets" / f"{style}.yaml"
+        preset = yaml.safe_load(preset_path.read_text()) if preset_path.exists() else {}
+    except Exception:
+        preset = {}
+
+    glossary = load_glossary()
+    corrections, _usage = auto_correct(transcript, preset, glossary)
+
+    if not corrections:
+        return
+
+    correction_cfg = preset.get("correction") or {}
+    min_confidence = float(correction_cfg.get("auto_apply_min_confidence", 0.85))
+
+    auto_apply = [c for c in corrections if c["confidence"] >= min_confidence]
+    suggestions = [c for c in corrections if c["confidence"] < min_confidence]
+
+    # Persist all correction metadata (auto-applied + suggestions) for the UI
+    meta_path = job.dir / "corrections.json"
+    meta_path.write_text(
+        json.dumps({
+            "base_key": transcript.get("cache_key") or transcript.get("file_hash", ""),
+            "auto_applied": auto_apply,
+            "suggestions": suggestions,
+        }, ensure_ascii=False, indent=2)
+    )
+
+    if auto_apply:
+        base_key = transcript.get("cache_key") or transcript.get("file_hash", "")
+        try:
+            save_corrections(
+                job.dir,
+                base_key,
+                [{"index": c["index"], "text": c["new"]} for c in auto_apply],
+            )
+        except ValueError as exc:
+            import logging
+            logging.getLogger(__name__).warning("auto-correct save failed: %s", exc)
 
 
 def _run_job(job: Job, preview: bool, loudnorm: bool = False) -> None:

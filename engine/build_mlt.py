@@ -8,6 +8,7 @@ from typing import Optional
 from xml.sax.saxutils import escape as esc
 
 from .schema import Plan, PROJECT_ROOT
+from .effects import effect_filter_xml
 from .captions import (
     STYLE_NAMES,
     load_style,
@@ -78,23 +79,27 @@ def build(
     for i, s in enumerate(plan.sfx):
         x.append(f'<producer id="sfx{i}"><property name="resource">{esc(resolve(s.file))}</property></producer>')
 
-    # V1: kept segments with per-entry affine zoom
+    # V1: typed effects override legacy per-entry zoom only on selected segments.
     x.append('<playlist id="v1">')
+    effects = {effect.segment_id: effect.type for effect in plan.visual_effects}
     total = 0
     for s in plan.segments:
         n = f(s.out) - f(s.in_)
-        z_from, z_to = s.zoom.from_, s.zoom.to
-        if abs(z_from - z_to) < 1e-6:
-            kf = f'0={_rect(z_from, W, H)}'
+        if s.id in effects:
+            filter_xml = effect_filter_xml(effects[s.id], n, W, H, punch_frames)
         else:
-            end_kf = min(punch_frames, max(n - 1, 1))
-            kf = f'0={_rect(z_from, W, H)};{end_kf}={_rect(z_to, W, H)}'
+            z_from, z_to = s.zoom.from_, s.zoom.to
+            if abs(z_from - z_to) < 1e-6:
+                kf = f'0={_rect(z_from, W, H)}'
+            else:
+                end_kf = min(punch_frames, max(n - 1, 1))
+                kf = f'0={_rect(z_from, W, H)};{end_kf}={_rect(z_to, W, H)}'
+            filter_xml = (f'<filter mlt_service="affine">'
+                          f'<property name="transition.rect">{kf}</property>'
+                          f'<property name="transition.fill">1</property></filter>')
         x.append(
             f'<entry producer="raw" in="{f(s.in_)}" out="{f(s.out) - 1}">'
-            f'<filter mlt_service="affine">'
-            f'<property name="transition.rect">{kf}</property>'
-            f'<property name="transition.fill">1</property>'
-            f'</filter></entry>'
+            f'{filter_xml}</entry>'
         )
         total += n
     x.append('</playlist>')

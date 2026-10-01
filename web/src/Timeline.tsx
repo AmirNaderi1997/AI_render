@@ -33,10 +33,13 @@ export function Timeline({ plan, onSeek }: { plan: any; onSeek: (t: number) => v
       {lane("Segments", segMarks.map(({ seg, start, end }: any) =>
         box("c-seg", start, end, seg.id, () => onSeek(start))
       ))}
-      {lane("Zoom", segMarks
-        .filter(({ seg }: any) => seg.zoom && (seg.zoom.from !== 1 || seg.zoom.to !== 1))
+      {lane("Effects", segMarks
+        .filter(({ seg }: any) => (plan.visual_effects || []).some((effect: any) => effect.segment_id === seg.id)
+          || (seg.zoom && (seg.zoom.from !== 1 || seg.zoom.to !== 1)))
         .map(({ seg, start, end }: any) =>
-          box("c-zoom", start, end, `${seg.zoom.from}→${seg.zoom.to}`, () => onSeek(start))
+          box("c-zoom", start, end,
+            (plan.visual_effects || []).find((effect: any) => effect.segment_id === seg.id)?.type
+              || `${seg.zoom.from}→${seg.zoom.to}`, () => onSeek(start))
         ))}
       {lane("Captions", (plan.captions || []).map((c: any) =>
         box("c-cap", c.start, c.end, c.text, () => onSeek(c.start))

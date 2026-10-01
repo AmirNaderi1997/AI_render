@@ -13,6 +13,9 @@ export default function NewReel() {
   const [planText, setPlanText] = React.useState("");
   const [style, setStyle] = React.useState("rafiei_reel");
   const [instruction, setInstruction] = React.useState("");
+  const [language, setLanguage] = React.useState("fa");
+  const [whisperModel, setWhisperModel] = React.useState("medium");
+  const [transcriptionHint, setTranscriptionHint] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [generating, setGenerating] = React.useState(false);
   const [genStatus, setGenStatus] = React.useState<any>(null);
@@ -75,7 +78,11 @@ export default function NewReel() {
     try {
       const { job } = await api.createJob(video);
       setJobId(job.id);
-      await api.generatePlan(job.id, { style, instruction: instruction.trim() });
+      await api.generatePlan(job.id, {
+        style, instruction: instruction.trim(), whisper_model: whisperModel,
+        language: language === "auto" ? null : language,
+        transcription_hint: transcriptionHint.trim(),
+      });
       setGenerating(true);
     } catch (e: any) {
       setErr("Failed: " + String(e.message || e));
@@ -113,6 +120,22 @@ export default function NewReel() {
         <select value={style} onChange={e => setStyle(e.target.value)}>
           <option value="rafiei_reel">Rafiei Reel Style</option>
         </select>
+        <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
+          <label>Speech language: <select value={language} onChange={e => setLanguage(e.target.value)}>
+            <option value="fa">Persian</option><option value="en">English</option>
+            <option value="auto">Auto detect</option>
+          </select></label>
+          <label>Transcription model: <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
+            <option value="medium">medium (recommended for Persian)</option>
+            <option value="small">small (faster)</option>
+            <option value="large-v3">large-v3 (slower)</option>
+          </select></label>
+        </div>
+        <label style={{ display: "block", marginTop: 12 }}>Speech terms or names (optional)
+          <input type="text" value={transcriptionHint} onChange={e => setTranscriptionHint(e.target.value)}
+            placeholder="e.g. product names, brand names, technical terms"
+            style={{ width: "100%" }} />
+        </label>
       </div>
 
       <div className="card">

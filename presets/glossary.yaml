@@ -1,0 +1,46 @@
+# Transcript correction glossary for Rafiei AI Editor
+# language: fa (Persian/Farsi)
+#
+# vocabulary: canonical spellings the LLM should prefer
+# corrections: known Whisper mis-transcriptions  →  correct form
+language: fa
+
+vocabulary:
+  - محصول          # product
+  - سرمایه‌گذاری   # investment
+  - کسب‌وکار       # business
+  - درآمد          # income/revenue
+  - فروش           # sales
+  - مارکتینگ       # marketing
+  - برندینگ        # branding
+  - استراتژی       # strategy
+  - اینستاگرام     # Instagram
+  - یوتیوب         # YouTube
+  - تلگرام         # Telegram
+  - لینکدین        # LinkedIn
+  - پرسونا         # persona
+  - کانتنت         # content
+  - کال‌تو‌اکشن    # call-to-action
+  - ویدئو          # video
+  - رافیعی         # Rafiei (brand name)
+
+corrections:
+  مخصول: محصول       # common Whisper error for محصول
+  مخصو: محصول
+  مخسول: محصول
+  ایرای: ایران
+  سرمایی: سرمایه
+  کسب‌کار: کسب‌وکار
+  درامد: درآمد
+  اینتسگرام: اینستاگرام
+  یوتیوپ: یوتیوب
+  میدونم: می‌دونم
+  نمیدونم: نمی‌دونم
+  میتونم: می‌تونم
+  نمیتونم: نمی‌تونم
+  میکنم: می‌کنم
+  نمیکنم: نمی‌کنم
+  میشه: می‌شه
+  نمیشه: نمی‌شه
+  میخوام: می‌خوام
+  نمیخوام: نمی‌خوام

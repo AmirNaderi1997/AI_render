@@ -20,10 +20,19 @@ export interface Job {
 
 export interface Transcript {
   file_hash: string;
+  cache_key?: string;
+  model_size?: string;
+  requested_language?: string;
+  correction_count?: number;
   language: string;
   duration: number;
-  words: { w: string; start: number; end: number; prob: number }[];
+  words: { w: string; start: number; end: number; prob: number; reviewed?: boolean; original_w?: string }[];
   sentences: { text: string; start: number; end: number }[];
+}
+
+export interface EffectPreset {
+  id: string; motion: string; light: string; label: string;
+  description: string; needs_framing_review: boolean; strong_accent: boolean;
 }
 
 export interface GenerateStatus {
@@ -71,7 +80,9 @@ export const api = {
   },
   async generatePlan(id: string, opts?: {
     style?: string; instruction?: string;
-    whisper_model?: string; language?: string;
+    whisper_model?: string; language?: string | null; use_saved_transcript?: boolean;
+    transcribe_only?: boolean;
+    transcription_hint?: string;
   }): Promise<{ status: string; stage: string }> {
     return j(await fetch(`${BASE}/jobs/${id}/generate-plan`, {
       method: "POST", headers: { "content-type": "application/json" },
@@ -83,6 +94,16 @@ export const api = {
   },
   async getTranscript(id: string): Promise<Transcript> {
     return j(await fetch(`${BASE}/jobs/${id}/transcript`));
+  },
+  async putTranscriptCorrections(id: string, base_key: string,
+    words: { index: number; text: string; start?: number; end?: number }[]): Promise<Transcript> {
+    return j(await fetch(`${BASE}/jobs/${id}/transcript/corrections`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ base_key, words }),
+    }));
+  },
+  async listEffects(): Promise<EffectPreset[]> {
+    return j(await fetch(`${BASE}/effects`));
   },
   async render(id: string, preview: boolean): Promise<{ status: string }> {
     return j(await fetch(`${BASE}/jobs/${id}/render?preview=${preview}`, { method: "POST" }));

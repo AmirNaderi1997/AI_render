@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from engine.schema import validate_plan
+from engine.effects import EFFECT_CATALOG, effect_filter_xml
 
 
 BASE_PLAN = {
@@ -53,6 +54,25 @@ def test_zoom_out_of_range_rejected():
     ]}
     _, errs2 = _v(p2)
     assert any("zoom" in e or "to" in e for e in errs2)
+
+
+def test_hundred_effect_presets_are_typed_and_renderable():
+    assert len(EFFECT_CATALOG) == 100
+    for effect_id in EFFECT_CATALOG:
+        xml = effect_filter_xml(effect_id, 90, 1080, 1920, 6)
+        assert "<filter" in xml or effect_id == "steady__neutral"
+
+
+def test_visual_effect_validation():
+    plan, errors = _v({**BASE_PLAN, "visual_effects": [
+        {"segment_id": "s1", "type": "punch__lift_soft"}]})
+    assert not errors and plan.visual_effects[0].type == "punch__lift_soft"
+    _, errors = _v({**BASE_PLAN, "visual_effects": [
+        {"segment_id": "s1", "type": "made_up"}]})
+    assert any("unknown visual effect" in error for error in errors)
+    _, errors = _v({**BASE_PLAN, "visual_effects": [
+        {"segment_id": "missing", "type": "steady__neutral"}]})
+    assert any("unknown segments" in error for error in errors)
 
 
 def test_caption_bounds():
