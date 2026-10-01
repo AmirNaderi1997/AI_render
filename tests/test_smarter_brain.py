@@ -382,7 +382,7 @@ def test_transcribe_passes_hotwords(tmp_path, monkeypatch):
     captured = _make_fake_transcribe_env(tmp_path, monkeypatch)
     from brain.transcribe import transcribe
     video = tmp_path / "test.mp4"; video.write_bytes(b"FAKE")
-    transcribe(video, tmp_path, language="fa", hotwords=["محصول", "رکورد"])
+    transcribe(video, tmp_path, language="fa", hotwords=["محصول", "رکورد"], engine="whisper")
     # hotwords forwarded when supported (may be swallowed by TypeError fallback)
     assert "initial_prompt" in captured or "hotwords" in captured  # at least one hint path ran
 
@@ -392,7 +392,7 @@ def test_transcribe_initial_prompt_passed(tmp_path, monkeypatch):
     captured = _make_fake_transcribe_env(tmp_path, monkeypatch)
     from brain.transcribe import transcribe
     video = tmp_path / "test.mp4"; video.write_bytes(b"FAKE")
-    transcribe(video, tmp_path, language="fa", initial_prompt="محصول، رکورد")
+    transcribe(video, tmp_path, language="fa", initial_prompt="محصول، رکورد", engine="whisper")
     assert captured.get("initial_prompt") == "محصول، رکورد"
 
 

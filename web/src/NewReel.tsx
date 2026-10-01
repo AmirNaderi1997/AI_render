@@ -15,6 +15,7 @@ export default function NewReel() {
   const [instruction, setInstruction] = React.useState("");
   const [language, setLanguage] = React.useState("fa");
   const [whisperModel, setWhisperModel] = React.useState("medium");
+  const [asrEngine, setAsrEngine] = React.useState("auto");
   const [transcriptionHint, setTranscriptionHint] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [generating, setGenerating] = React.useState(false);
@@ -82,6 +83,7 @@ export default function NewReel() {
         style, instruction: instruction.trim(), whisper_model: whisperModel,
         language: language === "auto" ? null : language,
         transcription_hint: transcriptionHint.trim(),
+        asr_engine: asrEngine === "auto" ? undefined : asrEngine,
       });
       setGenerating(true);
     } catch (e: any) {
@@ -125,11 +127,16 @@ export default function NewReel() {
             <option value="fa">Persian</option><option value="en">English</option>
             <option value="auto">Auto detect</option>
           </select></label>
-          <label>Transcription model: <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
+          <label>Transcription: <select value={asrEngine} onChange={e => setAsrEngine(e.target.value)}>
+            <option value="auto">Auto (best available)</option>
+            <option value="elevenlabs">ElevenLabs (best Persian)</option>
+            <option value="whisper">Whisper (offline)</option>
+          </select></label>
+          {asrEngine !== "elevenlabs" && <label>Whisper model: <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
             <option value="medium">medium (recommended for Persian)</option>
             <option value="small">small (faster)</option>
             <option value="large-v3">large-v3 (slower)</option>
-          </select></label>
+          </select></label>}
         </div>
         <label style={{ display: "block", marginTop: 12 }}>Speech terms or names (optional)
           <input type="text" value={transcriptionHint} onChange={e => setTranscriptionHint(e.target.value)}
@@ -163,6 +170,13 @@ export default function NewReel() {
           <div style={{ marginTop: 12, padding: "8px 12px", background: "#1e293b", borderRadius: 6 }}>
             <div>Stage: <b>{genStatus.stage || "starting"}</b></div>
             <div className="muted">{genStatus.message}</div>
+            {genStatus.asr_engine && (
+              <div className="muted" style={{ marginTop: 4 }}>
+                ASR: {genStatus.asr_engine}
+                {genStatus.asr_audio_seconds > 0 && ` · ${genStatus.asr_audio_seconds.toFixed(1)}s audio`}
+                {genStatus.asr_cost_usd > 0 && ` · $${genStatus.asr_cost_usd.toFixed(4)}`}
+              </div>
+            )}
           </div>
         )}
 

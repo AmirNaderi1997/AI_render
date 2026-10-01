@@ -4,12 +4,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "small"
+
+
+def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None) -> str:
+    if explicit and explicit in ("elevenlabs", "whisper"):
+        return explicit
+    env = os.environ.get("ASR_ENGINE", "").lower()
+    if env in ("elevenlabs", "whisper"):
+        return env
+    if (language or "").lower() == "fa" and os.environ.get("ELEVENLABS_API_KEY"):
+        return "elevenlabs"
+    return "whisper"
 
 
 def _normalize_persian(text: str) -> str:
@@ -165,31 +177,19 @@ def save_corrections(out_dir: Path, base_key: str, items: list[dict]) -> dict:
     return effective_transcript(out_dir)
 
 
-def transcribe(
+def _transcribe_whisper(
     video: Path,
     out_dir: Path,
-    model_size: Optional[str] = None,
-    language: Optional[str] = None,
-    device: str = "cpu",
-    compute_type: str = "int8",
-    initial_prompt: str = "",
-    hotwords: Optional[list[str]] = None,
+    fhash: str,
+    model_size: str,
+    language: Optional[str],
+    device: str,
+    compute_type: str,
+    initial_prompt: str,
+    hotwords: Optional[list[str]],
 ) -> dict:
-    """Transcribe *video* and write transcript.json to *out_dir*.
-
-    Returns the transcript dict: {words, sentences, language, duration}.
-    If a cached transcript exists for the same video and ASR settings, returns it.
-    """
-    video = Path(video).resolve()
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    transcript_path = out_dir / "transcript.json"
-
-    fhash = file_hash(video)
-
-    model_size = model_size or ("medium" if language == "fa" else _DEFAULT_MODEL)
-    initial_prompt = initial_prompt.strip()[:500]
     key = transcript_key(fhash, model_size, language, device, compute_type, initial_prompt)
+    transcript_path = out_dir / "transcript.json"
     archive = out_dir / "transcripts" / f"{key}.json"
 
     if archive.exists():
@@ -209,9 +209,8 @@ def transcribe(
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
     log.info("model cache dir: %s", model.model_path if hasattr(model, "model_path") else "unknown")
 
-    log.info("transcribing %s …", video.name)
+    log.info("transcribing %s (whisper) …", video.name)
 
-    # Extract audio to WAV first to avoid av package version issues
     import subprocess
     wav_path = out_dir / "audio_tmp.wav"
     subprocess.run(
@@ -220,8 +219,6 @@ def transcribe(
         capture_output=True, check=True,
     )
 
-    # Pass decoded PCM directly to faster-whisper. This avoids changing av.open
-    # process-wide, which could affect another job running at the same time.
     import wave
     import numpy as np
     try:
@@ -248,7 +245,6 @@ def transcribe(
                               "start": segment_words[0]["start"],
                               "end": segment_words[-1]["end"]})
 
-        # Second decode: different beam/temperature to find disagreements
         alt_words = _second_decode(model, audio, language=language)
         if len(alt_words) == len(words):
             for i, (w_entry, alt) in enumerate(zip(words, alt_words)):
@@ -265,6 +261,7 @@ def transcribe(
     transcript = {
         "file_hash": fhash,
         "cache_key": key,
+        "engine": "whisper",
         "model_size": model_size,
         "requested_language": language,
         "initial_prompt": initial_prompt,
@@ -282,3 +279,72 @@ def transcribe(
     log.info("transcribed %d words, %d sentences, lang=%s", len(words), len(sentences), detected_lang)
 
     return effective_transcript(out_dir)
+
+
+def transcribe(
+    video: Path,
+    out_dir: Path,
+    model_size: Optional[str] = None,
+    language: Optional[str] = None,
+    device: str = "cpu",
+    compute_type: str = "int8",
+    initial_prompt: str = "",
+    hotwords: Optional[list[str]] = None,
+    engine: Optional[str] = None,
+    keyterms: Optional[list[str]] = None,
+) -> dict:
+    """Transcribe *video* and write transcript.json to *out_dir*.
+
+    Returns the transcript dict: {words, sentences, language, duration}.
+    If a cached transcript exists for the same video and ASR settings, returns it.
+    """
+    video = Path(video).resolve()
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = out_dir / "transcript.json"
+
+    fhash = file_hash(video)
+    selected_engine = choose_engine(language, engine)
+
+    if selected_engine == "elevenlabs":
+        from brain.transcribe_elevenlabs import transcribe_elevenlabs
+        try:
+            log.info("transcribing %s (elevenlabs scribe) …", video.name)
+            transcript, asr_cost = transcribe_elevenlabs(
+                video, out_dir,
+                language=language,
+                file_digest=fhash,
+                keyterms=keyterms or hotwords,
+            )
+            _archive_current(out_dir)
+            encoded = json.dumps(transcript, indent=2, ensure_ascii=False)
+            transcript_path.write_text(encoded)
+
+            cost_path = out_dir / "asr_cost.json"
+            cost_path.write_text(json.dumps({
+                "engine": "elevenlabs",
+                "audio_seconds": transcript.get("duration", 0),
+                "cost_usd": asr_cost,
+            }, indent=2))
+
+            return effective_transcript(out_dir)
+        except Exception as exc:
+            log.warning("ElevenLabs failed (%s), falling back to whisper", exc)
+            selected_engine = "whisper"
+
+    model_size = model_size or ("medium" if language == "fa" else _DEFAULT_MODEL)
+    initial_prompt = initial_prompt.strip()[:500]
+
+    result = _transcribe_whisper(
+        video, out_dir, fhash, model_size, language,
+        device, compute_type, initial_prompt, hotwords,
+    )
+
+    cost_path = out_dir / "asr_cost.json"
+    cost_path.write_text(json.dumps({
+        "engine": "whisper",
+        "audio_seconds": result.get("duration", 0),
+        "cost_usd": 0.0,
+    }, indent=2))
+
+    return result

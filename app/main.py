@@ -130,6 +130,7 @@ class GenerateBody(BaseModel):
     use_saved_transcript: bool = False
     transcribe_only: bool = False
     transcription_hint: str = ""
+    asr_engine: Optional[str] = None
 
 
 @app.post("/jobs/{job_id}/generate-plan")
@@ -148,6 +149,7 @@ def generate_plan(job_id: str, body: GenerateBody = GenerateBody()):
         use_saved_transcript=body.use_saved_transcript,
         transcribe_only=body.transcribe_only,
         transcription_hint=body.transcription_hint,
+        asr_engine=body.asr_engine,
     )
     return {"status": job.generate.status, "stage": job.generate.stage}
 
@@ -166,6 +168,9 @@ def generate_status(job_id: str):
         "input_tokens": g.input_tokens,
         "output_tokens": g.output_tokens,
         "model": g.model,
+        "asr_engine": g.asr_engine,
+        "asr_audio_seconds": g.asr_audio_seconds,
+        "asr_cost_usd": g.asr_cost_usd,
     }
 
 

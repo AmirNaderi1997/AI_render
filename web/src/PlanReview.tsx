@@ -189,10 +189,14 @@ export default function PlanReview() {
       )}
 
       {/* Cost display */}
-      {genStatus?.cost_usd > 0 && (
+      {(genStatus?.cost_usd > 0 || genStatus?.asr_cost_usd > 0) && (
         <div className="card" style={{ padding: "8px 12px", fontSize: 13 }}>
-          LLM cost: <b>${genStatus.cost_usd.toFixed(4)}</b>
-          {" "}({genStatus.model}, {genStatus.input_tokens} in / {genStatus.output_tokens} out)
+          {genStatus.cost_usd > 0 && <>LLM cost: <b>${genStatus.cost_usd.toFixed(4)}</b>
+          {" "}({genStatus.model}, {genStatus.input_tokens} in / {genStatus.output_tokens} out)</>}
+          {genStatus.asr_cost_usd > 0 && <div>
+            ASR cost: <b>${genStatus.asr_cost_usd.toFixed(4)}</b>
+            {" "}({genStatus.asr_engine}, {genStatus.asr_audio_seconds?.toFixed(1)}s audio)
+          </div>}
         </div>
       )}
 

@@ -52,6 +52,7 @@ export interface Corrections {
 export interface GenerateStatus {
   status: string; stage: string; message: string;
   cost_usd: number; input_tokens: number; output_tokens: number; model: string;
+  asr_engine: string; asr_audio_seconds: number; asr_cost_usd: number;
 }
 
 async function j<T>(r: Response): Promise<T> {
@@ -97,6 +98,7 @@ export const api = {
     whisper_model?: string; language?: string | null; use_saved_transcript?: boolean;
     transcribe_only?: boolean;
     transcription_hint?: string;
+    asr_engine?: string;
   }): Promise<{ status: string; stage: string }> {
     return j(await fetch(`${BASE}/jobs/${id}/generate-plan`, {
       method: "POST", headers: { "content-type": "application/json" },

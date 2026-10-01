@@ -43,6 +43,9 @@ class GenerateState:
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
+    asr_engine: str = ""
+    asr_audio_seconds: float = 0.0
+    asr_cost_usd: float = 0.0
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
 
@@ -193,6 +196,7 @@ def start_generate(
     use_saved_transcript: bool = False,
     transcribe_only: bool = False,
     transcription_hint: str = "",
+    asr_engine: Optional[str] = None,
 ) -> None:
     if job.generate.status == "running":
         return
@@ -202,7 +206,7 @@ def start_generate(
     threading.Thread(
         target=_run_generate,
         args=(job, style, instruction, whisper_model, language, use_saved_transcript,
-              transcribe_only, transcription_hint),
+              transcribe_only, transcription_hint, asr_engine),
         daemon=True,
     ).start()
 
@@ -216,9 +220,10 @@ def _run_generate(
     use_saved_transcript: bool,
     transcribe_only: bool,
     transcription_hint: str,
+    asr_engine: Optional[str] = None,
 ) -> None:
     import os
-    from brain.transcribe import transcribe, effective_transcript, file_hash
+    from brain.transcribe import transcribe, effective_transcript, file_hash, choose_engine
     from brain.silence import detect_pauses
     from brain.planner import generate_plan
 
@@ -228,8 +233,9 @@ def _run_generate(
             raise FileNotFoundError(f"raw video not found: {raw_path}")
 
         # 1. Transcribe
+        selected_engine = choose_engine(language, asr_engine)
         job.generate.stage = "transcribing"
-        job.generate.message = "running whisper…"
+        job.generate.message = f"running {selected_engine}…"
         _write_status(job)
 
         if use_saved_transcript:
@@ -238,14 +244,25 @@ def _run_generate(
                 raise ValueError("saved transcript belongs to another video")
         else:
             wm = whisper_model or os.getenv("WHISPER_MODEL")
-            # Enrich the initial_prompt with glossary vocabulary so Whisper sees known terms
             from brain.correct import load_glossary
             from brain.glossary import build_initial_prompt
             _glossary = load_glossary()
             _vocab_hint = build_initial_prompt(_glossary, language or "fa")
             combined_hint = " ".join(filter(None, [_vocab_hint, transcription_hint])).strip()[:500]
-            transcript = transcribe(raw_path, job.dir, model_size=wm, language=language,
-                                    initial_prompt=combined_hint or None)
+            glossary_terms = list(_glossary.get("vocabulary") or [])
+            transcript = transcribe(
+                raw_path, job.dir, model_size=wm, language=language,
+                initial_prompt=combined_hint or None,
+                engine=asr_engine,
+                keyterms=glossary_terms or None,
+            )
+
+        asr_cost_path = job.dir / "asr_cost.json"
+        if asr_cost_path.exists():
+            asr_info = json.loads(asr_cost_path.read_text())
+            job.generate.asr_engine = asr_info.get("engine", "")
+            job.generate.asr_audio_seconds = asr_info.get("audio_seconds", 0)
+            job.generate.asr_cost_usd = asr_info.get("cost_usd", 0)
 
         # 2. Auto-correct transcript (best-effort; never breaks the pipeline)
         if not use_saved_transcript:
