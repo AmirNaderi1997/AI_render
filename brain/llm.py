@@ -1,7 +1,10 @@
 """Provider-agnostic LLM client.
 
-Chosen by env vars: LLM_PROVIDER (anthropic|openai), LLM_MODEL, and the
-corresponding API key. Default: anthropic + claude-sonnet-5-5.
+Chosen by env vars: LLM_PROVIDER (anthropic|openai|openai_compatible|jarvis),
+LLM_MODEL, and the corresponding API key. Default: anthropic + claude-sonnet-5-5.
+
+The "jarvis" provider is a preset for "openai_compatible" that reads
+JARVIS_API_KEY and JARVIS_BASE_URL from the environment.
 """
 from __future__ import annotations
 
@@ -71,6 +74,10 @@ def chat_json(
         return _anthropic_call(system, user, model, max_tokens)
     elif provider == "openai":
         return _openai_call(system, user, model, max_tokens, temperature)
+    elif provider in ("openai_compatible", "jarvis"):
+        return _openai_compatible_call(
+            system, user, model, max_tokens, temperature, preset=provider,
+        )
     else:
         raise ValueError(f"unsupported LLM_PROVIDER={provider!r}")
 
@@ -138,6 +145,74 @@ def _openai_call(
     log.info(
         "LLM %s: %d in / %d out tokens, ~$%.4f, %.1fs",
         model, usage.input_tokens, usage.output_tokens,
+        usage.cost_estimate, usage.elapsed_sec,
+    )
+
+    parsed = _extract_json(text)
+    return parsed, usage
+
+
+def _getenv_ci(name: str) -> str | None:
+    """Case-insensitive env var lookup."""
+    val = os.getenv(name)
+    if val:
+        return val
+    lower = name.lower()
+    for k, v in os.environ.items():
+        if k.lower() == lower:
+            return v
+    return None
+
+
+_PRESETS: dict[str, tuple[str, str]] = {
+    "jarvis": ("JARVIS_API_KEY", "JARVIS_BASE_URL"),
+}
+
+
+def _openai_compatible_call(
+    system: str,
+    user: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    preset: str = "openai_compatible",
+) -> tuple[dict, LLMUsage]:
+    from openai import OpenAI
+
+    if preset in _PRESETS:
+        key_env, url_env = _PRESETS[preset]
+    else:
+        key_env, url_env = "LLM_API_KEY", "LLM_BASE_URL"
+
+    api_key = _getenv_ci(key_env)
+    base_url = _getenv_ci(url_env)
+    if not api_key:
+        raise ValueError(f"{key_env} not set")
+    if not base_url:
+        raise ValueError(f"{url_env} not set")
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    t0 = time.monotonic()
+    response = client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+
+    text = response.choices[0].message.content or ""
+    usage = LLMUsage(
+        input_tokens=response.usage.prompt_tokens if response.usage else 0,
+        output_tokens=response.usage.completion_tokens if response.usage else 0,
+        model=model,
+        elapsed_sec=round(time.monotonic() - t0, 2),
+    )
+    log.info(
+        "LLM %s (%s): %d in / %d out tokens, ~$%.4f, %.1fs",
+        model, preset, usage.input_tokens, usage.output_tokens,
         usage.cost_estimate, usage.elapsed_sec,
     )
 

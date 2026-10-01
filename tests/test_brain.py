@@ -9,7 +9,7 @@ import pytest
 
 from brain.silence import word_gap_ranges, merge_ranges, _invert, detect_pauses
 from brain.planner import source_to_output_time, output_to_source_time, generate_plan
-from brain.llm import LLMUsage, _extract_json
+from brain.llm import LLMUsage, _extract_json, chat_json
 
 
 # ---- Fixtures ----
@@ -237,3 +237,101 @@ def test_caption_times_in_output_timeline():
         assert cap["start"] >= 0
         assert cap["end"] <= out_dur + 0.01
         assert cap["end"] > cap["start"]
+
+
+# ---- jarvis / openai_compatible provider ----
+
+def _make_fake_openai_module(fake_client_instance):
+    """Inject a fake 'openai' module into sys.modules for testing."""
+    import sys
+    import types
+    fake_mod = types.ModuleType("openai")
+    fake_cls = MagicMock(return_value=fake_client_instance)
+    fake_mod.OpenAI = fake_cls
+    return fake_mod, fake_cls
+
+
+def test_jarvis_provider_mocked():
+    """Jarvis provider sends correct request and parses response."""
+    import sys
+
+    fake_response = MagicMock()
+    fake_response.choices = [MagicMock()]
+    fake_response.choices[0].message.content = '{"result": "ok"}'
+    fake_response.usage.prompt_tokens = 100
+    fake_response.usage.completion_tokens = 50
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    fake_mod, fake_cls = _make_fake_openai_module(fake_client)
+
+    env = {
+        "LLM_PROVIDER": "jarvis",
+        "LLM_MODEL": "GPT_6_LUNA",
+        "JARVIS_API_KEY": "pmai_test_key",
+        "JARVIS_BASE_URL": "https://api.jarvis.you/v1",
+    }
+
+    old = sys.modules.get("openai")
+    sys.modules["openai"] = fake_mod
+    try:
+        with patch.dict("os.environ", env, clear=False):
+            result, usage = chat_json("system prompt", "user prompt")
+    finally:
+        if old is None:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = old
+
+    fake_cls.assert_called_once_with(
+        api_key="pmai_test_key", base_url="https://api.jarvis.you/v1",
+    )
+    call_kwargs = fake_client.chat.completions.create.call_args
+    assert call_kwargs.kwargs["model"] == "GPT_6_LUNA"
+    assert call_kwargs.kwargs["messages"][0]["content"] == "system prompt"
+    assert call_kwargs.kwargs["messages"][1]["content"] == "user prompt"
+    assert "response_format" not in call_kwargs.kwargs
+    assert result == {"result": "ok"}
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 50
+    assert usage.model == "GPT_6_LUNA"
+
+
+def test_openai_compatible_provider_mocked():
+    """Generic openai_compatible provider reads LLM_API_KEY and LLM_BASE_URL."""
+    import sys
+
+    fake_response = MagicMock()
+    fake_response.choices = [MagicMock()]
+    fake_response.choices[0].message.content = '{"x": 42}'
+    fake_response.usage.prompt_tokens = 10
+    fake_response.usage.completion_tokens = 5
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    fake_mod, fake_cls = _make_fake_openai_module(fake_client)
+
+    env = {
+        "LLM_PROVIDER": "openai_compatible",
+        "LLM_MODEL": "some-model",
+        "LLM_API_KEY": "key123",
+        "LLM_BASE_URL": "https://example.com/v1",
+    }
+
+    old = sys.modules.get("openai")
+    sys.modules["openai"] = fake_mod
+    try:
+        with patch.dict("os.environ", env, clear=False):
+            result, usage = chat_json("sys", "usr")
+    finally:
+        if old is None:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = old
+
+    fake_cls.assert_called_once_with(
+        api_key="key123", base_url="https://example.com/v1",
+    )
+    assert result == {"x": 42}
