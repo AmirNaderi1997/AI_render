@@ -162,11 +162,14 @@ def test_planner_generates_valid_plan(tmp_path):
             source_rel="raw/test.mp4",
         )
 
+    from engine.effects import EFFECT_CATALOG
     assert plan["segments"][0]["id"] == "s1"
     assert len(plan["captions"]) == 2
     assert len(plan["visual_effects"]) == len(plan["segments"])
-    assert plan["visual_effects"][0]["type"] == "steady__neutral"
-    assert usage.input_tokens == 1000
+    # Smarter scorer may assign any valid catalog effect (not necessarily steady__neutral)
+    assert plan["visual_effects"][0]["type"] in EFFECT_CATALOG
+    # V2 planner makes additional LLM calls (segment analysis + effect selection)
+    assert usage.input_tokens >= 1000
 
 
 def test_planner_retries_on_invalid(tmp_path):

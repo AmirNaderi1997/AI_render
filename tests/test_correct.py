@@ -121,12 +121,15 @@ def test_low_confidence_correction_returned_but_marked():
     assert corrections[0]["confidence"] == 0.60
 
 
-def test_no_flags_means_no_llm_call():
+def test_no_flags_still_calls_llm_for_context_review():
+    """V2: the LLM reviews the full transcript even when no words are pre-flagged
+    so it can catch contextually wrong words that Whisper was confident about."""
     good_transcript = {**TRANSCRIPT,
                        "words": _words(("محصول", 0.95), ("رو", 0.92), ("بخر", 0.88))}
-    with patch("brain.correct.chat_json") as mock_llm:
+    mock_result = {"corrections": []}  # LLM finds nothing to fix
+    with patch("brain.correct.chat_json", return_value=(mock_result, LLMUsage())) as mock_llm:
         corrections, _ = auto_correct(good_transcript, PRESET_WITH_THRESHOLD, {})
-    mock_llm.assert_not_called()
+    mock_llm.assert_called_once()  # always called now for context review
     assert corrections == []
 
 

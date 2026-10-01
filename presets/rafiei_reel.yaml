@@ -61,3 +61,8 @@ correction:
   low_prob_threshold: 0.60       # flag ASR words below this probability
   auto_apply_min_confidence: 0.85  # auto-apply LLM fix when LLM confidence >= this
   max_flagged_ratio: 0.40          # skip LLM call if more than this fraction of words are flagged
+  similarity_threshold: 0.20     # minimum char-bigram Jaccard for replace to pass guardrail
+effects:
+  max_family_share: 0.40         # no single family may occupy more than this fraction of segments
+  accent_min_gap_sec: 6.0        # minimum seconds between flash/punch_bright/flash_end
+  max_static_sec: 4.0            # max consecutive still/breathe seconds before critic flags it

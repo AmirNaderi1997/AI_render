@@ -238,8 +238,14 @@ def _run_generate(
                 raise ValueError("saved transcript belongs to another video")
         else:
             wm = whisper_model or os.getenv("WHISPER_MODEL")
+            # Enrich the initial_prompt with glossary vocabulary so Whisper sees known terms
+            from brain.correct import load_glossary
+            from brain.glossary import build_initial_prompt
+            _glossary = load_glossary()
+            _vocab_hint = build_initial_prompt(_glossary, language or "fa")
+            combined_hint = " ".join(filter(None, [_vocab_hint, transcription_hint])).strip()[:500]
             transcript = transcribe(raw_path, job.dir, model_size=wm, language=language,
-                                    initial_prompt=transcription_hint)
+                                    initial_prompt=combined_hint or None)
 
         # 2. Auto-correct transcript (best-effort; never breaks the pipeline)
         if not use_saved_transcript:
@@ -325,7 +331,7 @@ def _run_auto_correct(job: Job, transcript: dict, style: str) -> None:
     """Auto-correct transcript with LLM. Saves corrections.json and applies high-confidence fixes."""
     import yaml
     from engine.schema import PROJECT_ROOT
-    from brain.correct import auto_correct, load_glossary
+    from brain.correct import auto_correct, load_glossary, expand_corrections_for_save
     from brain.transcribe import save_corrections
 
     if not transcript.get("words"):
@@ -366,10 +372,12 @@ def _run_auto_correct(job: Job, transcript: dict, style: str) -> None:
     if auto_apply:
         base_key = transcript.get("cache_key") or transcript.get("file_hash", "")
         try:
+            words = transcript.get("words", [])
+            save_items = expand_corrections_for_save(auto_apply, words)
             save_corrections(
                 job.dir,
                 base_key,
-                [{"index": c["index"], "text": c["new"]} for c in auto_apply],
+                save_items,
             )
         except ValueError as exc:
             import logging

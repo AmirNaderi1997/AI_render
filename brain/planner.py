@@ -22,8 +22,10 @@ from typing import Optional
 import yaml
 
 from engine.schema import PROJECT_ROOT, EditPlan, format_error, validate_plan
-from engine.effects import MOTIONS, LIGHTS, EFFECT_CATALOG
+from engine.effects import MOTIONS, LIGHTS, EFFECT_CATALOG, EFFECT_FAMILIES, families_for_llm
 from .llm import LLMUsage, chat_json
+from .segment_analysis import analyse_segments
+from .effect_score import select_effects_with_llm, critic_effect_pass
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ def _is_persian(lang: str) -> bool:
     return lang.lower().strip() in _PERSIAN_CODES
 
 
-def _build_system_prompt(preset: dict, language: str = "en") -> str:
+def _build_system_prompt(preset: dict, language: str = "en", analyses: Optional[list[dict]] = None) -> str:
     persian = _is_persian(language)
     caption_lang_rule = (
         "\n- IMPORTANT: The video language is Persian (Farsi). Write ALL captions in Persian script "
@@ -48,6 +50,33 @@ def _build_system_prompt(preset: dict, language: str = "en") -> str:
         "Use Vazirmatn font. Each caption must be authentic Persian text from the transcript."
         if persian else ""
     )
+
+    # Build effect guidance: family names + pre-computed assignments when available
+    if analyses:
+        # Segment analyses already exist — skip effect details, tell the LLM effects are pre-assigned
+        effect_block = (
+            "- Visual effects for each segment have been pre-computed by the effect scorer. "
+            "You MUST include a visual_effects entry for every segment using the provided analysis. "
+            "Use the segment_id exactly as given. Valid types: <motion>__<light>. "
+            f"Motions: {', '.join(MOTIONS)}. Light treatments: {', '.join(LIGHTS)}."
+        )
+    else:
+        # No pre-analysis: give the LLM family descriptions to guide selection
+        families = families_for_llm()
+        fam_lines = "\n".join(
+            f"  {f['family']}: energy={f['energy']} mood={f['mood']} — {f['description']} (example: {f['example_id']})"
+            for f in families
+        )
+        effect_block = (
+            f"- Give each segment one visual_effects entry. Type must be <motion>__<light>.\n"
+            f"  Motions: {', '.join(MOTIONS)}. Light treatments: {', '.join(LIGHTS)}.\n"
+            f"- Choose from these named effect families (pick the example_id or any variant):\n"
+            f"{fam_lines}\n"
+            f"- Use light treatments (lift, dim, pulse, fade, breath) — don't default to __neutral for everything.\n"
+            f"- Do not use the same effect family more than twice in a row.\n"
+            f"- Use punch_bright or flash at most once. Use pan/tilt/drift only if framing is confirmed."
+        )
+
     return f"""You are Rafiei AI Editor — you turn raw video transcripts into edit plans.
 
 Output a single JSON object matching the Edit Plan schema below. No markdown, no explanation — pure JSON only.
@@ -84,11 +113,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 
 ## Style rules (from Rafiei Reel Style preset)
 - Max seconds without a cut, visual change, or B-roll: {preset.get("editing", {}).get("max_static_sec", 4.0)}
-- The 100 supported visual-effect presets are every combination of one motion and one light treatment. Type must be <motion>__<light>.
-- Motions: {', '.join(MOTIONS)}.
-- Light treatments: {', '.join(LIGHTS)}.
-- Give each segment one visual_effects entry. Use steady__neutral for quiet beats, punch__neutral for a key point, slow_push/slow_pull sparingly, and pulse_start/pulse_end on strong cuts only (at most once per 6 segments). Do not alternate the same two zoom values across the whole edit.
-- Pan/tilt/drift only when shot composition has been checked as safe; transcript alone is insufficient evidence. Effects apply to the entire named segment and never alter timeline duration.
+{effect_block}
 - The legacy segment.zoom field is retained for older plans; typed visual_effects take precedence.
 - Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each{caption_lang_rule}
 - Mark one emphasis caption per key point, one CTA caption at the end
@@ -254,6 +279,39 @@ def _caption_review(plan_data: dict, transcript: dict) -> list[dict]:
     return warnings
 
 
+def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dict, preset: dict) -> LLMUsage:
+    """Run the effect scorer + critic pass, write results into plan_data in-place.
+
+    Returns combined LLM usage from both calls.
+    """
+    segments = plan_data.get("segments", [])
+    if not segments or not analyses:
+        return LLMUsage()
+
+    scored_effects, sel_usage = select_effects_with_llm(segments, analyses, transcript, preset)
+
+    # Convert scorer output → plan visual_effects (strip private _family/_reason keys)
+    total_dur = sum(s.get("out", 0) - s.get("in", 0) for s in segments)
+    scored_effects, crit_usage = critic_effect_pass(scored_effects, analyses, total_dur, preset)
+
+    plan_data["visual_effects"] = [
+        {"segment_id": e["segment_id"], "type": e["type"]}
+        for e in scored_effects
+    ]
+    # Save debug metadata separately so it doesn't fail schema validation
+    plan_data["effect_analysis"] = [
+        {"segment_id": e["segment_id"], "family": e.get("_family", ""), "reason": e.get("_reason", "")}
+        for e in scored_effects
+    ]
+
+    combined = LLMUsage()
+    combined.input_tokens = sel_usage.input_tokens + crit_usage.input_tokens
+    combined.output_tokens = sel_usage.output_tokens + crit_usage.output_tokens
+    combined.model = sel_usage.model or crit_usage.model
+    combined.elapsed_sec = sel_usage.elapsed_sec + crit_usage.elapsed_sec
+    return combined
+
+
 def generate_plan(
     job_dir: Path,
     transcript: dict,
@@ -268,6 +326,11 @@ def generate_plan(
     """Generate and validate an edit plan using the LLM.
 
     Returns (plan_dict, total_usage). Retries up to *max_retries* on validation failure.
+
+    V2 improvements:
+    - Segment analysis (role/energy/emotion) runs before effect selection
+    - Effect scorer picks top-3 families per segment, LLM chooses from those
+    - Critic pass fixes obvious pacing issues (same family twice, static overrun)
     """
     preset = _load_preset(preset_name)
 
@@ -275,7 +338,9 @@ def generate_plan(
     sfx_file = _find_asset(job_dir, "sfx")
 
     lang = transcript.get("language", "en")
-    system_prompt = _build_system_prompt(preset, language=lang)
+
+    # Pass no analyses yet — LLM produces layout + segments first, effects second
+    system_prompt = _build_system_prompt(preset, language=lang, analyses=None)
     user_prompt = _build_user_prompt(
         transcript, keep_ranges, remove_ranges,
         source_rel, music_file, sfx_file, instruction,
@@ -311,7 +376,33 @@ def generate_plan(
 
         # Clamp segment.out to source duration so renders never exceed it
         _clamp_segments(plan_data, job_dir, source_rel)
-        _ensure_visual_effects(plan_data)
+
+        # --- Smarter effect selection (V2) ---
+        segments = plan_data.get("segments", [])
+        if segments:
+            if on_progress:
+                on_progress("analysing segments…")
+            try:
+                analyses, anlys_usage = analyse_segments(
+                    segments, transcript,
+                    source_captions=plan_data.get("captions"),
+                )
+                total_usage.input_tokens += anlys_usage.input_tokens
+                total_usage.output_tokens += anlys_usage.output_tokens
+                total_usage.elapsed_sec += anlys_usage.elapsed_sec
+
+                if on_progress:
+                    on_progress("selecting effects…")
+                eff_usage = _apply_scored_effects(plan_data, analyses, transcript, preset)
+                total_usage.input_tokens += eff_usage.input_tokens
+                total_usage.output_tokens += eff_usage.output_tokens
+                total_usage.elapsed_sec += eff_usage.elapsed_sec
+            except Exception as exc:
+                log.warning("smarter effect selection failed: %s — using _ensure_visual_effects", exc)
+                _ensure_visual_effects(plan_data)
+        else:
+            _ensure_visual_effects(plan_data)
+
         plan_data["caption_review"] = _caption_review(plan_data, transcript)
 
         plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
