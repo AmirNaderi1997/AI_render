@@ -27,17 +27,43 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env", override=False)
 
 
+def _build_effect_timeline(effects_v2, effect_analysis, words, plan_data):
+    seg_text_map: dict = {}
+    for seg in plan_data.get("segments", []):
+        seg_words = [w["w"] for w in words
+                     if seg.get("in", 0) - 0.05 <= w.get("start", 0) <= seg.get("out", 0) + 0.05]
+        seg_text_map[seg["id"]] = " ".join(seg_words)[:80]
+    return [
+        {
+            "seg": e["segment_id"],
+            "type": e["type"],
+            "family": ea.get("family", ""),
+            "reason": ea.get("reason", ""),
+            "intensity": ea.get("intensity", ""),
+            "text": seg_text_map.get(e["segment_id"], ""),
+        }
+        for e, ea in zip(effects_v2, effect_analysis)
+    ]
+
+
 def run_on_job(job_dir: Path, video_path: Path, label: str) -> dict:
     """Run V2 correction + plan generation on an existing transcript + video."""
     log.info("=== %s: %s ===", label, job_dir)
     t0 = time.time()
 
-    from brain.transcribe import effective_transcript
+    from brain.transcribe import effective_transcript, transcribe
     from brain.correct import auto_correct, load_glossary, detect_suspect_words
     from brain.silence import detect_pauses
     from brain.planner import generate_plan
 
-    # 1. Load existing transcript
+    # 1. Load or generate transcript
+    transcript_path = job_dir / "transcript.json"
+    if not transcript_path.exists():
+        log.info("No transcript found — running Whisper on %s", video_path)
+        from brain.glossary import build_initial_prompt
+        glossary = load_glossary()
+        hint = build_initial_prompt(glossary, "fa")
+        transcribe(video_path, job_dir, language="fa", initial_prompt=hint)
     transcript = effective_transcript(job_dir)
     words = transcript["words"]
     log.info("Transcript: %d words, lang=%s, model=%s",
@@ -106,18 +132,7 @@ def run_on_job(job_dir: Path, video_path: Path, label: str) -> dict:
         "distinct_families": len(families_used),
         "families_used": families_used,
         "lights_used": lights_used,
-        "effect_timeline": [
-            {
-                "seg": e["segment_id"],
-                "type": e["type"],
-                "family": ea.get("family", ""),
-                "reason": ea.get("reason", ""),
-                "intensity": ea.get("intensity", ""),
-                "text": next((s["text"] for s in
-                              plan_data.get("segments", []) if s.get("id") == e["segment_id"]), ""),
-            }
-            for e, ea in zip(effects_v2, effect_analysis)
-        ],
+        "effect_timeline": _build_effect_timeline(effects_v2, effect_analysis, words, plan_data),
         "llm_cost_usd": round(total_usage_usd, 4),
         "correction_tokens_in": corr_usage.input_tokens,
         "correction_tokens_out": corr_usage.output_tokens,
