@@ -3,6 +3,7 @@
 name: Rafiei Reel Style
 captions:
   fonts_dir: presets/fonts
+  persian_font: Vazirmatn   # override font when language is fa
   base:
     font: Arial
     size: 78

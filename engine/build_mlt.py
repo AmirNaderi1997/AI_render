@@ -50,8 +50,12 @@ def build(
     srt_paths = write_srts(plan, out_dir)
 
     cap_cfg = style.get("captions", {})
-    cap_base = cap_cfg.get("base", {})
+    cap_base = dict(cap_cfg.get("base", {}))
     cap_styles = cap_cfg.get("styles", {}) or {}
+    # Use Vazirmatn for Persian captions
+    from .captions import _plan_is_persian
+    if _plan_is_persian(plan) and "persian_font" in cap_cfg:
+        cap_base = {**cap_base, "font": cap_cfg["persian_font"]}
 
     x = [
         '<?xml version="1.0" encoding="utf-8"?>',

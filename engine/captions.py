@@ -71,10 +71,20 @@ def ass_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", "\\N")
 
 
+def _has_persian(text: str) -> bool:
+    return any("؀" <= ch <= "ۿ" for ch in text)
+
+
+def _plan_is_persian(plan: Plan) -> bool:
+    return any(_has_persian(c.text) for c in plan.captions)
+
+
 def build_ass(plan: Plan, style: dict) -> str:
     W, H = plan.canvas.width, plan.canvas.height
     cap = style.get("captions", {})
-    base = cap.get("base", {})
+    base = dict(cap.get("base", {}))
+    if _plan_is_persian(plan) and "persian_font" in cap:
+        base = {**base, "font": cap["persian_font"]}
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
              "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
              "[V4+ Styles]",

@@ -30,7 +30,21 @@ def _load_preset(name: str = "rafiei_reel") -> dict:
     return yaml.safe_load(p.read_text())
 
 
-def _build_system_prompt(preset: dict) -> str:
+_PERSIAN_CODES = {"fa", "per", "fas", "persian", "farsi"}
+
+
+def _is_persian(lang: str) -> bool:
+    return lang.lower().strip() in _PERSIAN_CODES
+
+
+def _build_system_prompt(preset: dict, language: str = "en") -> str:
+    persian = _is_persian(language)
+    caption_lang_rule = (
+        "\n- IMPORTANT: The video language is Persian (Farsi). Write ALL captions in Persian script "
+        "(right-to-left, joined letters). Do NOT translate to English. "
+        "Use Vazirmatn font. Each caption must be authentic Persian text from the transcript."
+        if persian else ""
+    )
     return f"""You are Rafiei AI Editor — you turn raw video transcripts into edit plans.
 
 Output a single JSON object matching the Edit Plan schema below. No markdown, no explanation — pure JSON only.
@@ -66,7 +80,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 - Max seconds without a cut, zoom change, or B-roll: {preset.get("editing", {}).get("max_static_sec", 4.0)}
 - Punch-in zoom: fast 6-frame jump to {preset.get("zoom", {}).get("punch_in_zoom", 1.15)}x (use on key sentences)
 - Slow zoom: gradual {preset.get("zoom", {}).get("slow_zoom_from", 1.0)}→{preset.get("zoom", {}).get("slow_zoom_to", 1.08)}x over the segment
-- Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each
+- Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each{caption_lang_rule}
 - Mark one emphasis caption per key point, one CTA caption at the end
 - B-roll: ~{preset.get("broll", {}).get("default_duration_sec", 2.0)}s each, minimum {preset.get("broll", {}).get("min_gap_sec", 8.0)}s apart
 - Place a whoosh SFX on each cut into B-roll
@@ -199,7 +213,8 @@ def generate_plan(
     music_file = _find_asset(job_dir, "music")
     sfx_file = _find_asset(job_dir, "sfx")
 
-    system_prompt = _build_system_prompt(preset)
+    lang = transcript.get("language", "en")
+    system_prompt = _build_system_prompt(preset, language=lang)
     user_prompt = _build_user_prompt(
         transcript, keep_ranges, remove_ranges,
         source_rel, music_file, sfx_file, instruction,
