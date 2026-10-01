@@ -11,6 +11,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 log = logging.getLogger(__name__)
 
 SCRIBE_MODEL = "scribe_v2"

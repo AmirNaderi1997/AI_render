@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "small"
