@@ -74,6 +74,29 @@ def test_full_plan_has_audio(tmp_path, media_dir, has_melt):
     assert has_audio(out)
 
 
+def test_render_duration_with_long_music(tmp_path, media_dir, has_melt):
+    """Music file longer than the edit must not extend rendered output."""
+    if not has_melt:
+        pytest.skip("melt not on PATH")
+    import subprocess
+    tmp_path, data = _prep_job(tmp_path, media_dir, "full.json")
+    # Create a music file 3x longer than the edit (output_duration ~ 7.5 s → 30 s)
+    long_music = tmp_path / "long_music.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi",
+         "-i", "sine=frequency=220:sample_rate=48000:duration=30",
+         "-ac", "2", str(long_music)],
+        check=True, capture_output=True,
+    )
+    data["music"]["file"] = "long_music.wav"
+    out = _render(tmp_path, data, "out_long_music.mp4")
+    expected = sum(s["out"] - s["in"] for s in data["segments"])
+    got = probe_duration(out)
+    assert abs(got - expected) < 1.0 / 30 + 0.05, (
+        f"rendered {got:.3f}s but plan duration is {expected:.3f}s"
+    )
+
+
 def test_build_produces_absolute_paths(tmp_path, media_dir):
     tmp_path, data = _prep_job(tmp_path, media_dir, "full.json")
     plan, errs = validate_plan(data, base_dir=tmp_path, check_media=True)

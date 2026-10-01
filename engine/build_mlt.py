@@ -100,6 +100,10 @@ def build(
     pos = 0
     for i, b in valid_broll:
         at, dur = f(b.at), f(b.duration)
+        # clamp so B-roll never extends past the output duration
+        dur = min(dur, max(total - at, 0))
+        if dur <= 0:
+            continue
         if at > pos:
             x.append(f'<blank length="{at - pos}"/>')
         x.append(f'<entry producer="broll{i}" in="{f(b.in_)}" out="{f(b.in_) + dur - 1}"/>')
@@ -129,19 +133,22 @@ def build(
     else:
         x.append('<playlist id="a1"/>')
 
-    # A2: SFX
+    # A2: SFX (clamp each entry so it never extends past total frames)
     x.append('<playlist id="a2">')
     pos = 0
     for i, s in enumerate(plan.sfx):
         at = f(s.at)
+        remaining = max(total - at, 0)
+        if remaining <= 0:
+            continue
         if at > pos:
             x.append(f'<blank length="{at - pos}"/>')
         x.append(
-            f'<entry producer="sfx{i}">'
+            f'<entry producer="sfx{i}" in="0" out="{remaining - 1}">'
             f'<filter mlt_service="volume"><property name="level">{s.volume_db}</property></filter>'
             f'</entry>'
         )
-        pos = at + 18
+        pos = at + remaining
     x.append('</playlist>')
 
     # Tractor

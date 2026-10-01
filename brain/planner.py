@@ -233,6 +233,9 @@ def generate_plan(
         total_usage.model = usage.model
         total_usage.elapsed_sec += usage.elapsed_sec
 
+        # Clamp segment.out to source duration so renders never exceed it
+        _clamp_segments(plan_data, job_dir, source_rel)
+
         plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
 
         media_warnings = _check_media_soft(plan_data, job_dir)
@@ -250,6 +253,26 @@ def generate_plan(
         f"Failed to generate a valid plan after {max_retries} attempts. "
         f"Last errors: {'; '.join(last_errors)}"
     )
+
+
+def _clamp_segments(plan_data: dict, job_dir: Path, source_rel: str) -> None:
+    """Clamp segment.out to source file duration (in-place)."""
+    src = Path(source_rel)
+    src_path = src if src.is_absolute() else (job_dir / src)
+    if not src_path.exists():
+        return
+    try:
+        from engine.probe import probe_duration
+        src_dur = probe_duration(src_path)
+    except Exception:
+        return
+    for seg in plan_data.get("segments", []):
+        seg_in = seg.get("in", 0)
+        seg_out = seg.get("out", 0)
+        if seg_out > src_dur:
+            seg["out"] = round(src_dur, 6)
+        if seg_in > src_dur:
+            seg["in"] = round(src_dur, 6)
 
 
 def _check_media_soft(plan_data: dict, job_dir: Path) -> list[str]:
