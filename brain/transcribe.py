@@ -41,6 +41,40 @@ def transcript_key(file_digest: str, model_size: str, language: Optional[str],
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _try_hotwords(model, audio, *, language: Optional[str], initial_prompt: Optional[str],
+                  hotwords: Optional[list[str]]) -> tuple:
+    """Attempt transcription with hotwords; silently fall back if not supported."""
+    base_kwargs = dict(
+        word_timestamps=True, vad_filter=True,
+        beam_size=5, language=language,
+        initial_prompt=initial_prompt or None,
+    )
+    if hotwords:
+        try:
+            return model.transcribe(audio, hotwords=hotwords, **base_kwargs)
+        except TypeError:
+            log.debug("faster-whisper: hotwords not supported in this version — skipping")
+    return model.transcribe(audio, **base_kwargs)
+
+
+def _second_decode(model, audio, *, language: Optional[str]) -> list[dict]:
+    """Run a second pass at temperature=0.3 / beam_size=3 and return word list."""
+    try:
+        segs_iter, _ = model.transcribe(
+            audio, word_timestamps=True, vad_filter=True,
+            beam_size=3, temperature=0.3, language=language,
+            initial_prompt=None,
+        )
+        alt_words: list[dict] = []
+        for seg in segs_iter:
+            for w in (seg.words or []):
+                alt_words.append(_normalize_persian(w.word.strip()))
+        return alt_words
+    except Exception as exc:
+        log.debug("second decode failed: %s", exc)
+        return []
+
+
 def _candidate_key(raw: dict) -> str:
     return raw.get("cache_key", raw["file_hash"])
 
@@ -139,6 +173,7 @@ def transcribe(
     device: str = "cpu",
     compute_type: str = "int8",
     initial_prompt: str = "",
+    hotwords: Optional[list[str]] = None,
 ) -> dict:
     """Transcribe *video* and write transcript.json to *out_dir*.
 
@@ -193,9 +228,10 @@ def transcribe(
         with wave.open(str(wav_path), "rb") as wav:
             audio = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
             audio = audio.astype(np.float32) / 32768.0
-        segments_iter, info = model.transcribe(
-            audio, word_timestamps=True, vad_filter=True,
-            beam_size=5, language=language, initial_prompt=initial_prompt or None,
+        segments_iter, info = _try_hotwords(
+            model, audio, language=language,
+            initial_prompt=initial_prompt or None,
+            hotwords=hotwords or [],
         )
         words: list[dict] = []
         sentences: list[dict] = []
@@ -211,6 +247,15 @@ def transcribe(
             sentences.append({"text": " ".join(w["w"] for w in segment_words),
                               "start": segment_words[0]["start"],
                               "end": segment_words[-1]["end"]})
+
+        # Second decode: different beam/temperature to find disagreements
+        alt_words = _second_decode(model, audio, language=language)
+        if len(alt_words) == len(words):
+            for i, (w_entry, alt) in enumerate(zip(words, alt_words)):
+                if alt and alt != w_entry["w"]:
+                    w_entry["alt_w"] = alt
+            log.info("second decode: %d word(s) differ",
+                     sum(1 for w in words if "alt_w" in w))
     finally:
         wav_path.unlink(missing_ok=True)
 

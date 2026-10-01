@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, EffectPreset, Job, Transcript } from "./api";
+import { api, Correction, Corrections, EffectPreset, Job, Transcript } from "./api";
 import { Timeline } from "./Timeline";
 
 type Tab = "visual" | "json";
@@ -16,6 +16,8 @@ export default function PlanReview() {
   const [transcript, setTranscript] = React.useState<Transcript | null>(null);
   const [wordEdits, setWordEdits] = React.useState<Record<number, WordEdit>>({});
   const [effects, setEffects] = React.useState<EffectPreset[]>([]);
+  const [corrections, setCorrections] = React.useState<Corrections | null>(null);
+  const [dismissedCorrections, setDismissedCorrections] = React.useState<Set<number>>(new Set());
   const [transcriptMessage, setTranscriptMessage] = React.useState("");
   const [reviewModel, setReviewModel] = React.useState("medium");
   const [reviewHint, setReviewHint] = React.useState("");
@@ -33,6 +35,7 @@ export default function PlanReview() {
     api.getTranscript(id).then(t => { setTranscript(t); setWordEdits({}); }).catch(() => {});
     api.listEffects().then(setEffects).catch(() => {});
     api.generateStatus(id).then(setGenStatus).catch(() => {});
+    api.getCorrections(id).then(setCorrections).catch(() => {});
   }, [id]);
 
   // Poll generate status if running
@@ -47,6 +50,7 @@ export default function PlanReview() {
             if (j.plan) setPlanText(JSON.stringify(j.plan, null, 2));
           });
           api.getTranscript(id).then(t => { setTranscript(t); setWordEdits({}); }).catch(() => {});
+          api.getCorrections(id).then(setCorrections).catch(() => {});
         }
       }).catch(() => {});
     }, 1500);
@@ -203,6 +207,53 @@ export default function PlanReview() {
         </div>
       </div>
 
+      {/* Review Corrections Panel */}
+      {corrections && (corrections.suggestions.length > 0 || corrections.auto_applied.length > 0) && (
+        <ReviewCorrectionsPanel
+          corrections={corrections}
+          dismissed={dismissedCorrections}
+          transcript={transcript}
+          jobId={id!}
+          onSeek={seekTo}
+          onAccept={async (c) => {
+            if (!id || !transcript) return;
+            try {
+              await api.acceptCorrection(id, {
+                base_key: transcript.cache_key || transcript.file_hash,
+                index: c.index, old: c.old, new: c.new,
+                save_to_glossary: true,
+              });
+              const updated = await api.getTranscript(id);
+              setTranscript(updated);
+              setWordEdits({});
+              setDismissedCorrections(d => new Set([...d, c.index]));
+              setTranscriptMessage(`Accepted: ${c.old} → ${c.new} (saved to glossary)`);
+            } catch (e: any) { setTranscriptMessage(String(e.message || e)); }
+          }}
+          onReject={async (c) => {
+            if (!id) return;
+            await api.rejectCorrection(id, { index: c.index, old: c.old }).catch(() => {});
+            setDismissedCorrections(d => new Set([...d, c.index]));
+          }}
+          onAcceptAllHigh={async () => {
+            if (!id || !transcript) return;
+            const highConf = corrections.suggestions.filter(c => c.confidence >= 0.85 && !dismissedCorrections.has(c.index));
+            for (const c of highConf) {
+              try {
+                await api.acceptCorrection(id, {
+                  base_key: transcript.cache_key || transcript.file_hash,
+                  index: c.index, old: c.old, new: c.new, save_to_glossary: true,
+                });
+                setDismissedCorrections(d => new Set([...d, c.index]));
+              } catch { /* skip one failure */ }
+            }
+            const updated = await api.getTranscript(id).catch(() => null);
+            if (updated) { setTranscript(updated); setWordEdits({}); }
+            setTranscriptMessage(`Accepted ${highConf.length} high-confidence correction(s)`);
+          }}
+        />
+      )}
+
       {/* Transcript */}
       {transcript && (
         <div className="card">
@@ -290,6 +341,82 @@ export default function PlanReview() {
 }
 
 
+/* ---------- Review Corrections Panel ---------- */
+
+function ReviewCorrectionsPanel({ corrections, dismissed, transcript, jobId, onSeek, onAccept, onReject, onAcceptAllHigh }: {
+  corrections: Corrections;
+  dismissed: Set<number>;
+  transcript: Transcript | null;
+  jobId: string;
+  onSeek: (t: number) => void;
+  onAccept: (c: Correction) => void;
+  onReject: (c: Correction) => void;
+  onAcceptAllHigh: () => void;
+}) {
+  const pending = corrections.suggestions.filter(c => !dismissed.has(c.index));
+  const applied = corrections.auto_applied.filter(c => !dismissed.has(c.index));
+  const highConf = pending.filter(c => c.confidence >= 0.85);
+
+  function playWord(c: Correction) {
+    if (transcript) {
+      const w = transcript.words[c.index];
+      if (w) onSeek(w.start);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Review Corrections
+        {pending.length > 0 && <span className="muted" style={{ fontWeight: "normal", fontSize: 14, marginLeft: 8 }}>
+          {pending.length} pending
+        </span>}
+      </h2>
+
+      {applied.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Auto-applied (confidence ≥ 0.85):</div>
+          {applied.map(c => (
+            <div key={c.index} className="ve-item" style={{ background: "#f0fdf4", borderLeft: "3px solid #22c55e" }}>
+              <span className="muted">#{c.index}</span>
+              <span style={{ textDecoration: "line-through", color: "#888" }}>{c.old}</span>
+              <span>→</span>
+              <b>{c.new}</b>
+              <span className="muted" style={{ fontSize: 12 }}>{(c.confidence * 100).toFixed(0)}% — {c.reason}</span>
+              <button className="secondary" style={{ fontSize: 12 }} onClick={() => playWord(c)}>▶</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Suggestions (review required):</div>
+            {pending.map(c => (
+              <div key={c.index} className="ve-item" style={{ background: "#fefce8", borderLeft: "3px solid #eab308" }}>
+                <span className="muted">#{c.index}</span>
+                <span style={{ color: "#b45309" }}>{c.old}</span>
+                <span>→</span>
+                <b>{c.new}</b>
+                <span className="muted" style={{ fontSize: 12 }}>{(c.confidence * 100).toFixed(0)}% — {c.reason}</span>
+                <button className="secondary" style={{ fontSize: 12 }} onClick={() => playWord(c)} title="Play word audio">▶</button>
+                <button style={{ fontSize: 12 }} onClick={() => onAccept(c)}>Accept</button>
+                <button className="secondary" style={{ fontSize: 12 }} onClick={() => onReject(c)}>Reject</button>
+              </div>
+            ))}
+          </div>
+          {highConf.length > 0 && (
+            <button onClick={onAcceptAllHigh}>
+              Accept all high-confidence ({highConf.length})
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+
 /* ---------- Transcript view with clickable words ---------- */
 
 function TranscriptView({ transcript, plan, onSeek, edits, onEdit }: {
@@ -357,24 +484,40 @@ function VisualEditor({ plan, effects, onEffectChange, onUpdate, onDelete, onSee
   onSeek: (t: number) => void;
 }) {
   const [activeEffectSegment, setActiveEffectSegment] = React.useState<string | null>(null);
+  const [suggestSegment, setSuggestSegment] = React.useState<string | null>(null);
+
+  // Build effect analysis map from plan metadata
+  const effectAnalysisMap: Record<string, { family: string; reason: string; intensity: number }> = {};
+  for (const ea of (plan.effect_analysis || [])) {
+    effectAnalysisMap[ea.segment_id] = ea;
+  }
+
   return (
     <div className="visual-editor">
       {/* Segments */}
       <h3>Segments ({plan.segments?.length || 0})</h3>
       {!!plan.effect_review?.length &&
         <p className="errors">{plan.effect_review.length} motion effect(s) need a framing check in preview.</p>}
-      {plan.segments?.map((seg: any, i: number) => (
+      {plan.segments?.map((seg: any, i: number) => {
+        const currentEffect = (plan.visual_effects || []).find((e: any) => e.segment_id === seg.id);
+        const analysis = effectAnalysisMap[seg.id];
+        return (
         <div key={seg.id || i} className="ve-item" onClick={() => onSeek(seg.in)}>
           <span className="ve-id">{seg.id}</span>
           <span className="muted">{seg.in.toFixed(2)}s → {seg.out.toFixed(2)}s</span>
           <button className="secondary" onClick={e => {
-            e.stopPropagation(); setActiveEffectSegment(activeEffectSegment === seg.id ? null : seg.id);
+            e.stopPropagation(); setSuggestSegment(null);
+            setActiveEffectSegment(activeEffectSegment === seg.id ? null : seg.id);
           }}>
-            Effect: {(plan.visual_effects || []).find((effect: any) => effect.segment_id === seg.id)?.type || "Legacy zoom"}
+            Effect: {currentEffect?.type || "Legacy zoom"}
+            {analysis && <span className="muted" style={{ fontSize: 11 }}> ({analysis.family} ×{analysis.intensity})</span>}
           </button>
+          {analysis?.reason && !activeEffectSegment && (
+            <span className="muted" style={{ fontSize: 11 }}>{analysis.reason}</span>
+          )}
           {activeEffectSegment === seg.id && <label>Choose:
             <select aria-label={`Effect for ${seg.id}`}
-              value={(plan.visual_effects || []).find((effect: any) => effect.segment_id === seg.id)?.type || ""}
+              value={currentEffect?.type || ""}
               onClick={e => e.stopPropagation()}
               onChange={e => { onEffectChange(seg.id, e.target.value); setActiveEffectSegment(null); }}>
               <option value="">Legacy zoom</option>
@@ -386,6 +529,26 @@ function VisualEditor({ plan, effects, onEffectChange, onUpdate, onDelete, onSee
               ))}
             </select>
           </label>}
+          {/* Suggest Alternative button */}
+          <button className="secondary" style={{ fontSize: 11 }} title="Suggest alternative effects"
+            onClick={e => { e.stopPropagation(); setSuggestSegment(suggestSegment === seg.id ? null : seg.id); setActiveEffectSegment(null); }}>
+            Alt
+          </button>
+          {suggestSegment === seg.id && (
+            <div style={{ marginTop: 4, padding: "4px 8px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                {analysis ? `Family: ${analysis.family} | Energy: ${analysis.intensity}/5 | ${analysis.reason}` : "No analysis available"}
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {effects.filter(e => currentEffect?.type && e.id !== currentEffect.type).slice(0, 2).map(alt => (
+                  <button key={alt.id} className="secondary" style={{ fontSize: 11 }}
+                    onClick={e2 => { e2.stopPropagation(); onEffectChange(seg.id, alt.id); setSuggestSegment(null); }}>
+                    {alt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {!(plan.visual_effects || []).some((effect: any) => effect.segment_id === seg.id) && <><label>Zoom from:
             <input type="number" step={0.05} min={1} max={1.5}
               value={seg.zoom?.from ?? 1}
@@ -401,7 +564,8 @@ function VisualEditor({ plan, effects, onEffectChange, onUpdate, onDelete, onSee
           </>}
           <button className="danger-sm" onClick={e => { e.stopPropagation(); onDelete(["segments"], i); }}>✕</button>
         </div>
-      ))}
+        );
+      })}
 
       {/* Captions */}
       <h3>Captions ({plan.captions?.length || 0})</h3>

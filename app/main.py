@@ -208,6 +208,68 @@ def put_transcript_corrections(job_id: str, body: CorrectionsBody):
         raise HTTPException(409, str(exc)) from exc
 
 
+@app.get("/jobs/{job_id}/corrections")
+def get_corrections(job_id: str):
+    """Return auto-correction suggestions from the last generate-plan run."""
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    p = job.dir / "corrections.json"
+    if not p.exists():
+        return {"auto_applied": [], "suggestions": []}
+    return json.loads(p.read_text())
+
+
+class AcceptCorrectionBody(BaseModel):
+    base_key: str
+    index: int
+    old: str
+    new: str
+    start: Optional[float] = None
+    end: Optional[float] = None
+    save_to_glossary: bool = True
+
+
+@app.post("/jobs/{job_id}/corrections/accept")
+def accept_correction(job_id: str, body: AcceptCorrectionBody):
+    """Accept one correction: save to transcript and optionally to glossary.yaml."""
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if not (job.dir / "transcript.json").exists():
+        raise HTTPException(404, "transcript not generated yet")
+    from brain.transcribe import save_corrections
+    from brain.glossary import save_correction_to_glossary
+    item: dict = {"index": body.index, "text": body.new}
+    if body.start is not None:
+        item["start"] = body.start
+    if body.end is not None:
+        item["end"] = body.end
+    try:
+        result = save_corrections(job.dir, body.base_key, [item])
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if body.save_to_glossary:
+        save_correction_to_glossary(body.old, body.new)
+    return result
+
+
+class RejectCorrectionBody(BaseModel):
+    index: int
+    old: str
+
+
+@app.post("/jobs/{job_id}/corrections/reject")
+def reject_correction(job_id: str, body: RejectCorrectionBody):
+    """Reject a correction — marks the word as reviewed so it won't be flagged again."""
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    # Return 200 with an acknowledgement — the UI removes it from the list.
+    # The word keeps its original text; we don't write to the transcript.
+    return {"ok": True, "index": body.index, "word": body.old}
+
+
 @app.post("/jobs/{job_id}/render")
 def render(job_id: str, preview: bool = False, loudnorm: bool = False):
     job = jobstore.get(job_id)

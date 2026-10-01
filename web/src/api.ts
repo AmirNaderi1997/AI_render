@@ -35,6 +35,20 @@ export interface EffectPreset {
   description: string; needs_framing_review: boolean; strong_accent: boolean;
 }
 
+export interface Correction {
+  index: number;
+  old: string;
+  new: string;
+  confidence: number;
+  reason: string;
+  type?: string;
+}
+
+export interface Corrections {
+  auto_applied: Correction[];
+  suggestions: Correction[];
+}
+
 export interface GenerateStatus {
   status: string; stage: string; message: string;
   cost_usd: number; input_tokens: number; output_tokens: number; model: string;
@@ -104,6 +118,24 @@ export const api = {
   },
   async listEffects(): Promise<EffectPreset[]> {
     return j(await fetch(`${BASE}/effects`));
+  },
+  async getCorrections(id: string): Promise<Corrections> {
+    return j(await fetch(`${BASE}/jobs/${id}/corrections`));
+  },
+  async acceptCorrection(id: string, body: {
+    base_key: string; index: number; old: string; new: string;
+    start?: number; end?: number; save_to_glossary?: boolean;
+  }): Promise<any> {
+    return j(await fetch(`${BASE}/jobs/${id}/corrections/accept`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+  },
+  async rejectCorrection(id: string, body: { index: number; old: string }): Promise<any> {
+    return j(await fetch(`${BASE}/jobs/${id}/corrections/reject`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }));
   },
   async render(id: string, preview: boolean): Promise<{ status: string }> {
     return j(await fetch(`${BASE}/jobs/${id}/render?preview=${preview}`, { method: "POST" }));

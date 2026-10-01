@@ -84,6 +84,24 @@ def score_families(
     return scores
 
 
+def _find_emphasis_start(
+    key_words: list[str],
+    transcript: dict,
+    seg_in: float,
+    seg_out: float,
+) -> Optional[float]:
+    """Find the source-time start of the first emphasis key word in the segment."""
+    if not key_words:
+        return None
+    words = transcript.get("words", [])
+    first_kw = key_words[0].strip()
+    for w in words:
+        if seg_in - 0.05 <= w.get("start", 0) <= seg_out + 0.05:
+            if w["w"].strip() == first_kw:
+                return w["start"]
+    return None
+
+
 def select_effects_with_llm(
     segments: list[dict],
     analyses: list[dict],
@@ -119,6 +137,12 @@ def select_effects_with_llm(
         scored = score_families(analysis, prev_family, prev_prev_family, accent_debt, style)
         top3 = [name for name, _ in scored[:3]]
 
+        emphasis_start = _find_emphasis_start(
+            analysis.get("key_words", []),
+            transcript,
+            seg.get("in", 0),
+            seg.get("out", 0),
+        )
         candidates_per_seg.append({
             "segment_id": seg["id"],
             "duration": round(dur, 2),
@@ -129,6 +153,7 @@ def select_effects_with_llm(
             "key_words": analysis.get("key_words", []),
             "candidates": top3,
             "top_score_family": top3[0] if top3 else "still",
+            "emphasis_start": emphasis_start,
         })
         prev_prev_family = prev_family
         prev_family = top3[0] if top3 else "still"
@@ -203,7 +228,15 @@ Output ONLY this JSON:
         )
         prev_fam = effects[-1].get("_family", "") if effects else ""
         effect_id = family_to_effect_id(family, seg_index, prev_fam)
-        chosen_by_id[sid] = {"effect_id": effect_id, "family": family, "reason": reason}
+        emphasis_start = cspec.get("emphasis_start")
+        intensity = EFFECT_FAMILIES.get(family, {}).get("energy", 2)
+        chosen_by_id[sid] = {
+            "effect_id": effect_id,
+            "family": family,
+            "reason": reason,
+            "emphasis_start": emphasis_start,
+            "intensity": intensity,
+        }
 
     # Fill any missing segments with top score
     for cspec in candidates_per_seg:
@@ -212,10 +245,24 @@ Output ONLY this JSON:
             family = cspec["top_score_family"]
             seg_index = next((i for i, s in enumerate(segments) if s["id"] == sid), 0)
             effect_id = family_to_effect_id(family, seg_index)
-            chosen_by_id[sid] = {"effect_id": effect_id, "family": family, "reason": "top score fallback"}
+            intensity = EFFECT_FAMILIES.get(family, {}).get("energy", 2)
+            chosen_by_id[sid] = {
+                "effect_id": effect_id,
+                "family": family,
+                "reason": "top score fallback",
+                "emphasis_start": cspec.get("emphasis_start"),
+                "intensity": intensity,
+            }
 
     effects = [
-        {"segment_id": sid, "type": v["effect_id"], "_family": v["family"], "_reason": v["reason"]}
+        {
+            "segment_id": sid,
+            "type": v["effect_id"],
+            "_family": v["family"],
+            "_reason": v["reason"],
+            "_intensity": v.get("intensity", 2),
+            "_emphasis_start": v.get("emphasis_start"),
+        }
         for sid, v in chosen_by_id.items()
     ]
 

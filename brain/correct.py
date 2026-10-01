@@ -121,6 +121,9 @@ def detect_suspect_words(
         if norm in corrections_map:
             reasons.append(f"known_error→{corrections_map[norm]}")
 
+        if "alt_w" in w and w["alt_w"] != w["w"]:
+            reasons.append(f"decode_disagree:{w['alt_w']}")
+
         if reasons:
             flagged.append({"index": i, "word": w["w"], "reasons": reasons})
 

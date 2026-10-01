@@ -35,6 +35,7 @@ def analyse_segments(
     transcript: dict,
     *,
     source_captions: Optional[list[dict]] = None,
+    signals: Optional[list[dict]] = None,
 ) -> tuple[list[dict], LLMUsage]:
     """Classify each segment by role/energy/emotion using one LLM call.
 
@@ -66,6 +67,11 @@ def analyse_segments(
                 and c.get("end", 0) <= seg_end_out + 0.1
             ]
 
+    signals_map: dict[str, dict] = {}
+    if signals:
+        for sig in signals:
+            signals_map[sig["segment_id"]] = sig
+
     for seg in segments:
         seg_in, seg_out = seg.get("in", 0), seg.get("out", 0)
         seg_words = [
@@ -74,15 +80,27 @@ def analyse_segments(
         ]
         text = " ".join(seg_words)
         caps = captions_by_seg.get(seg["id"], [])
-        seg_texts.append({
+        sig = signals_map.get(seg["id"], {})
+        entry: dict = {
             "id": seg["id"],
             "duration": round(seg_out - seg_in, 2),
             "text": text[:300],
             "captions": caps,
-        })
+        }
+        if sig.get("loudness_lufs") is not None:
+            entry["loudness_lufs"] = sig["loudness_lufs"]
+        if sig.get("speech_rate_wps") is not None:
+            entry["speech_rate_wps"] = sig["speech_rate_wps"]
+        seg_texts.append(entry)
 
     total_dur = sum(s.get("out", 0) - s.get("in", 0) for s in segments)
     lang = transcript.get("language", "unknown")
+
+    has_signals = any("loudness_lufs" in s or "speech_rate_wps" in s for s in seg_texts)
+    signals_note = (
+        "\n  - loudness_lufs and speech_rate_wps (words/sec) are measured audio signals to help calibrate energy."
+        if has_signals else ""
+    )
 
     system = f"""Analyse each video segment for an editor.
 
@@ -92,18 +110,27 @@ For each segment return a JSON analysis with:
   - energy: 1 (calm/quiet) to 5 (peak energy/impact)
   - emotion: one word (e.g. curious, assertive, warm, urgent, reflective, playful)
   - key_words: 1-3 most important words (in the source language)
-  - is_turning_point: true if this is a structural shift (from problem→solution, question→answer, buildup→payoff)
+  - is_turning_point: true if this is a structural shift (from problem→solution, question→answer, buildup→payoff){signals_note}
 
 Output ONLY this JSON:
 {{"segments": [{{"id": "<seg_id>", "role": "<role>", "energy": <1-5>, "emotion": "<word>", "key_words": ["<w1>"], "is_turning_point": <bool>}}]}}"""
 
+    def _seg_line(s: dict) -> str:
+        line = f"Segment {s['id']} ({s['duration']}s): {s['text']!r}"
+        extras = []
+        if s['captions']:
+            extras.append(f"captions: {s['captions']}")
+        if s.get("loudness_lufs") is not None:
+            extras.append(f"loudness={s['loudness_lufs']} LUFS")
+        if s.get("speech_rate_wps") is not None:
+            extras.append(f"rate={s['speech_rate_wps']} w/s")
+        if extras:
+            line += "\n  " + ", ".join(extras)
+        return line
+
     user = (
         f"Video language: {lang}, {len(segments)} segments, {total_dur:.1f}s total.\n\n"
-        + "\n".join(
-            f"Segment {s['id']} ({s['duration']}s): {s['text']!r}"
-            + (f"\n  planned captions: {s['captions']}" if s['captions'] else "")
-            for s in seg_texts
-        )
+        + "\n".join(_seg_line(s) for s in seg_texts)
         + "\n\nReturn the JSON analysis."
     )
 

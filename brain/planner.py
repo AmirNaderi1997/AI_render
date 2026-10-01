@@ -26,6 +26,7 @@ from engine.effects import MOTIONS, LIGHTS, EFFECT_CATALOG, EFFECT_FAMILIES, fam
 from .llm import LLMUsage, chat_json
 from .segment_analysis import analyse_segments
 from .effect_score import select_effects_with_llm, critic_effect_pass
+from .signals import measure_segment_signals
 
 log = logging.getLogger(__name__)
 
@@ -300,7 +301,13 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     ]
     # Save debug metadata separately so it doesn't fail schema validation
     plan_data["effect_analysis"] = [
-        {"segment_id": e["segment_id"], "family": e.get("_family", ""), "reason": e.get("_reason", "")}
+        {
+            "segment_id": e["segment_id"],
+            "family": e.get("_family", ""),
+            "reason": e.get("_reason", ""),
+            "intensity": e.get("_intensity", 2),
+            "emphasis_start": e.get("_emphasis_start"),
+        }
         for e in scored_effects
     ]
 
@@ -383,9 +390,18 @@ def generate_plan(
             if on_progress:
                 on_progress("analysing segments…")
             try:
+                # Measure audio signals per segment (loudness + speech rate)
+                src_path = Path(source_rel) if Path(source_rel).is_absolute() else (job_dir / source_rel)
+                try:
+                    seg_signals = measure_segment_signals(src_path, segments, transcript)
+                except Exception as sig_exc:
+                    log.debug("signals measurement skipped: %s", sig_exc)
+                    seg_signals = []
+
                 analyses, anlys_usage = analyse_segments(
                     segments, transcript,
                     source_captions=plan_data.get("captions"),
+                    signals=seg_signals,
                 )
                 total_usage.input_tokens += anlys_usage.input_tokens
                 total_usage.output_tokens += anlys_usage.output_tokens
