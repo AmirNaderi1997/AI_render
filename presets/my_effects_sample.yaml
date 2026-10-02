@@ -1,0 +1,46 @@
+# Sample My Effects for MYVIDEO.mp4 real run
+# This demonstrates the V4 custom effects system with favorites, rules, and user preferences
+
+favorites:
+  punch__lift_medium:
+    weight: 1.5
+    tags: ["key_claim", "emphasis", "hook"]
+  close_hold__lift_soft:
+    weight: 1.3
+    tags: ["emotion", "intimate", "direct"]
+  slow_push__lift_medium:
+    weight: 1.2
+    tags: ["building", "warm", "positive"]
+  freeze_frame_zoom:
+    weight: 1.4
+    tags: ["punctuation", "revelation", "stat"]
+  text_pop_scale:
+    weight: 1.0
+    tags: ["emphasis", "energy"]
+
+rules:
+  - text: "روی اعداد و آمار زوم سریع بزن — punch یا flash برای تأکید"
+    priority: hard
+  - text: "قبل از CTA آروم شو — breathe یا slow_push برای آرام‌سازی"
+    priority: hard
+  - text: "هیچ‌وقت RGB glitch نزن — تنها برای تک‌مقطع‌های خاص"
+    priority: hard
+  - text: "روی سوالات قاب نزدیک — close_hold برای تماس چشمی"
+    priority: soft
+
+dislikes:
+  - rgb_split
+  - drift
+
+custom_assets:
+  light_leak_warm:
+    type: overlay
+    path: assets/overlays/light_leak_warm.mp4
+    tags: ["cinematic", "warm", "transition"]
+    when_to_use: "بین بخش‌های اصلی برای انتقال نرم"
+
+  celebration_emoji:
+    type: sticker
+    path: assets/stickers/star.png
+    tags: ["playful", "milestone"]
+    when_to_use: "روی نقاط موفقیت یا میلستون‌ها"
