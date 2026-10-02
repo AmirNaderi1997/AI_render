@@ -1,15 +1,12 @@
 custom_assets: {}
 dislikes: []
 favorites:
-  hold_close__fade_out:
+  drift_diag__lift_soft:
     tags: []
-    weight: 1
-  punch__fade_out:
-    tags: []
-    weight: 1
+    weight: 1.3
   steady__neutral:
     tags: []
-    weight: 1
+    weight: 1.1
 rules:
 - priority: hard
   text: زوم نکن
