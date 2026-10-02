@@ -69,14 +69,34 @@ Analyze them and suggest specific improvements. Focus on:
 Be constructive and specific."""
 
     try:
-        response, usage = chat_vision(
+        text, usage = chat_vision(
             system=system_prompt,
             user=user_prompt,
             images=frames,
-            return_json=True,
+            return_json=False,
             model="claude-opus-5-5",  # Use better model for critique
             max_tokens=2048,
         )
+
+        # Extract JSON from response (handle markdown code blocks)
+        text = str(text)
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+
+        # Try to parse JSON
+        try:
+            response = json.loads(text)
+        except json.JSONDecodeError:
+            # Find first { and last } and try again
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start >= 0 and end > start:
+                response = json.loads(text[start:end])
+            else:
+                print(f"\n✗ Could not extract JSON from response")
+                return None
 
         print(f"\n✓ Vision analysis complete")
         print(f"  Model: {usage.model}")
@@ -87,6 +107,8 @@ Be constructive and specific."""
 
     except Exception as e:
         print(f"\n✗ Vision analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def main():
