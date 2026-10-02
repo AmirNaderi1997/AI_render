@@ -46,6 +46,7 @@ class GenerateState:
     asr_engine: str = ""
     asr_audio_seconds: float = 0.0
     asr_cost_usd: float = 0.0
+    correction_model: str = ""
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
 
@@ -365,7 +366,10 @@ def _run_auto_correct(job: Job, transcript: dict, style: str) -> None:
         preset = {}
 
     glossary = load_glossary()
-    corrections, _usage = auto_correct(transcript, preset, glossary)
+    corrections, usage = auto_correct(transcript, preset, glossary)
+    if usage.model:
+        job.generate.correction_model = usage.model
+        _write_status(job)
 
     if not corrections:
         return

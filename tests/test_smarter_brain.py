@@ -473,3 +473,24 @@ def test_accept_correction_saves_to_glossary_via_api(tmp_path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["words"][0]["w"] == "می‌فروشم"
+
+
+# ── off-camera talk removal rule in planner prompt ───────────────────────────
+
+def test_planner_prompt_has_off_camera_rule():
+    """The planner system prompt must include off-camera talk removal rule."""
+    from brain.planner import _build_system_prompt
+    prompt = _build_system_prompt({})
+    assert "off-camera" in prompt.lower()
+    assert "setup chatter" in prompt.lower() or "camera operator" in prompt.lower()
+    assert "رکورد" in prompt  # example Persian chatter word
+
+
+def test_planner_removes_off_camera_segments():
+    """LLM planner should be instructed to remove setup chatter — mocked test."""
+    from brain.planner import _build_system_prompt
+    prompt = _build_system_prompt({})
+    # All these patterns should be mentioned as things to cut
+    assert "بزن رکورد" in prompt or "رکورد زدی" in prompt
+    assert "اسکیپ" in prompt
+    assert "ضبط" in prompt or "crew" in prompt.lower()

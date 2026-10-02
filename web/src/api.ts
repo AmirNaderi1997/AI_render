@@ -53,6 +53,7 @@ export interface GenerateStatus {
   status: string; stage: string; message: string;
   cost_usd: number; input_tokens: number; output_tokens: number; model: string;
   asr_engine: string; asr_audio_seconds: number; asr_cost_usd: number;
+  correction_model: string;
 }
 
 async function j<T>(r: Response): Promise<T> {

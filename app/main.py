@@ -171,6 +171,7 @@ def generate_status(job_id: str):
         "asr_engine": g.asr_engine,
         "asr_audio_seconds": g.asr_audio_seconds,
         "asr_cost_usd": g.asr_cost_usd,
+        "correction_model": g.correction_model,
     }
 
 

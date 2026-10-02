@@ -92,21 +92,42 @@ def is_acceptable_replacement(old: str, new: str, threshold: float = 0.25) -> bo
     return _similarity(old, new) >= threshold
 
 
+import re as _re
+
+_LATIN_RE = _re.compile(r'[A-Za-z]')
+
+
+def is_latin_word(text: str) -> bool:
+    """True if the word contains any Latin letter (A-Z/a-z)."""
+    return bool(_LATIN_RE.search(text))
+
+
 def detect_suspect_words(
     words: list[dict],
     threshold: float,
     glossary: dict,
+    *,
+    language: str = "",
 ) -> list[dict]:
     """Return [{index, word, reasons}] for words needing review.
 
     Flags words whose Whisper probability is below *threshold* OR whose
     normalized form appears in the glossary's known-error table.
+    For Persian transcripts, also flags Latin-script words (e.g. "rekord").
     Skips words already marked *reviewed* by a human.
     """
     corrections_map: dict[str, str] = {
         normalize_persian(bad).lower(): normalize_persian(good)
         for bad, good in (glossary.get("corrections") or {}).items()
     }
+    is_persian = language.lower().strip() in ("fa", "per", "fas", "persian", "farsi")
+
+    # Build set of allowed Latin words from glossary (brands/acronyms)
+    latin_allowlist: set[str] = set()
+    if is_persian:
+        for term in (glossary.get("vocabulary") or []):
+            if is_latin_word(str(term)):
+                latin_allowlist.add(str(term).lower().strip())
 
     flagged: list[dict] = []
     for i, w in enumerate(words):
@@ -123,6 +144,11 @@ def detect_suspect_words(
 
         if "alt_w" in w and w["alt_w"] != w["w"]:
             reasons.append(f"decode_disagree:{w['alt_w']}")
+
+        if is_persian and is_latin_word(w["w"]):
+            stripped = w["w"].lower().strip(".,،؛:!؟?\"'")
+            if stripped not in latin_allowlist:
+                reasons.append("latin_in_persian")
 
         if reasons:
             flagged.append({"index": i, "word": w["w"], "reasons": reasons})
@@ -171,6 +197,9 @@ Your job: find mis-transcribed words in the transcript and suggest corrections.
 - Fix ONLY individual words (or a merge/split of adjacent words). Do not rewrite clauses.
 - Never change the meaning, tense, or language register.
 - For Persian: use standard characters (ی not ي, ک not ك). Keep ZWNJ (نیم‌فاصله).
+- For Persian transcripts: any word in Latin script (e.g. "rekord", "product") MUST be
+  converted to its Persian equivalent (رکورد, محصول). Captions must never mix Latin words
+  into RTL text unless the word is a real brand/acronym listed in the glossary.
 - A fix must sound phonetically similar to the original — do not invent words.
 - Confidence 0.0-1.0: 1.0 = certain, 0.5 = plausible, <0.5 = a guess.
   Be conservative — if unsure, confidence < 0.7.
@@ -272,6 +301,163 @@ def _apply_merge_split(
     return [{"index": idx, "text": new_word}]
 
 
+def _call_correction_llm(
+    system: str, user: str, model: Optional[str],
+    max_retries: int = 2,
+) -> tuple[Optional[dict], LLMUsage]:
+    """Call LLM for correction with retry. Returns (parsed_response, usage)."""
+    total_usage = LLMUsage()
+    for attempt in range(1, max_retries + 1):
+        try:
+            kwargs = {"max_tokens": 2048, "temperature": 0.0}
+            if model:
+                kwargs["model"] = model
+            raw, usage = chat_json(system, user, **kwargs)
+            total_usage.input_tokens += usage.input_tokens
+            total_usage.output_tokens += usage.output_tokens
+            total_usage.model = usage.model
+            total_usage.elapsed_sec += usage.elapsed_sec
+
+            if not raw or (isinstance(raw, dict) and not raw.get("corrections") and raw.get("corrections") != []):
+                if attempt < max_retries:
+                    log.warning("auto_correct: empty response (attempt %d/%d), retrying…", attempt, max_retries)
+                    continue
+                log.warning("auto_correct: empty response after %d attempts", max_retries)
+            return raw, total_usage
+        except Exception as exc:
+            total_usage.model = model or ""
+            if attempt < max_retries:
+                log.warning("auto_correct: LLM call failed (attempt %d/%d): %s — retrying…", attempt, max_retries, exc)
+                continue
+            log.error("auto_correct: LLM call failed after %d attempts: %s", max_retries, exc)
+            return None, total_usage
+    return None, total_usage
+
+
+def _auto_correct_chunked(
+    transcript: dict,
+    all_flagged: list[dict],
+    glossary: dict,
+    preset: dict,
+    model: Optional[str],
+    sim_threshold: float,
+) -> tuple[list[dict], LLMUsage]:
+    """Run correction in chunks of _CHUNK_SIZE words for long transcripts."""
+    words = transcript["words"]
+    total_usage = LLMUsage()
+    all_corrections: list[dict] = []
+
+    flagged_by_idx = {f["index"]: f for f in all_flagged}
+
+    for chunk_start in range(0, len(words), _CHUNK_SIZE):
+        chunk_end = min(chunk_start + _CHUNK_SIZE, len(words))
+        chunk_words = words[chunk_start:chunk_end]
+
+        chunk_sentences = [
+            s for s in transcript.get("sentences", [])
+            if any(chunk_start <= i < chunk_end
+                   for i, w in enumerate(words)
+                   if s["start"] - 0.05 <= w.get("start", 0) <= s["end"] + 0.05)
+        ]
+        chunk_flagged = [f for f in all_flagged if chunk_start <= f["index"] < chunk_end]
+
+        chunk_transcript = {
+            **transcript,
+            "words": chunk_words,
+            "sentences": chunk_sentences,
+        }
+
+        # Remap flagged indices to chunk-local indices for the prompt
+        local_flagged = [
+            {**f, "index": f["index"] - chunk_start}
+            for f in chunk_flagged
+        ]
+
+        system, user = _build_prompts(chunk_transcript, local_flagged, glossary)
+        raw, usage = _call_correction_llm(system, user, model)
+        total_usage.input_tokens += usage.input_tokens
+        total_usage.output_tokens += usage.output_tokens
+        total_usage.model = usage.model
+        total_usage.elapsed_sec += usage.elapsed_sec
+
+        if raw and raw.get("corrections"):
+            for item in raw["corrections"]:
+                try:
+                    item["index"] = int(item["index"]) + chunk_start
+                except (KeyError, ValueError, TypeError):
+                    continue
+            # Filter and validate using the same logic as the main function
+            # (delegated back via the caller's processing)
+            all_corrections.extend(raw["corrections"])
+
+    # Re-use the main validation logic by constructing a fake raw response
+    log.info("auto_correct chunked: %d total corrections from %d chunks",
+             len(all_corrections), (len(words) + _CHUNK_SIZE - 1) // _CHUNK_SIZE)
+
+    # Run the same validation as the non-chunked path
+    corrections_map = {
+        normalize_persian(bad).lower(): normalize_persian(good)
+        for bad, good in (glossary.get("corrections") or {}).items()
+    }
+    validated = _validate_corrections(all_corrections, words, corrections_map, sim_threshold)
+    return validated, total_usage
+
+
+def _validate_corrections(
+    raw_corrections: list[dict],
+    words: list[dict],
+    corrections_map: dict[str, str],
+    sim_threshold: float,
+) -> list[dict]:
+    """Validate and deduplicate correction items."""
+    corrections: list[dict] = []
+    seen: set[int] = set()
+    for item in raw_corrections:
+        try:
+            idx = int(item["index"])
+            new_word = str(item.get("new") or "").strip()
+            confidence = float(item.get("confidence", 0.5))
+            reason = str(item.get("reason") or "")[:200]
+            correction_type = str(item.get("type") or "replace").lower()
+            old_word = str(item.get("old") or (words[idx]["w"] if 0 <= idx < len(words) else ""))
+
+            if idx in seen or not (0 <= idx < len(words)):
+                continue
+            if not new_word or len(new_word) > 200:
+                continue
+            if new_word == words[idx]["w"]:
+                continue
+
+            norm_old = normalize_persian(old_word).lower()
+            is_glossary_fix = norm_old.strip(".,،؛:!؟?\"'") in corrections_map
+            if (not is_glossary_fix
+                    and correction_type == "replace"
+                    and not is_acceptable_replacement(old_word, new_word, sim_threshold)):
+                confidence = min(confidence, 0.5)
+
+            seen.add(idx)
+            corrections.append({
+                "index": idx,
+                "old": old_word,
+                "new": new_word,
+                "confidence": round(min(1.0, max(0.0, confidence)), 3),
+                "reason": reason,
+                "type": correction_type if correction_type in ("replace", "split", "merge") else "replace",
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
+    return corrections
+
+
+def _correction_model() -> Optional[str]:
+    """Return CORRECTION_MODEL from env, or None to use the default LLM_MODEL."""
+    import os
+    return os.environ.get("CORRECTION_MODEL") or None
+
+
+_CHUNK_SIZE = 200  # max words per LLM correction call
+
+
 def auto_correct(
     transcript: dict,
     preset: dict,
@@ -299,7 +485,8 @@ def auto_correct(
     if not words:
         return [], LLMUsage()
 
-    flagged = detect_suspect_words(words, threshold, glossary)
+    lang = transcript.get("language", "")
+    flagged = detect_suspect_words(words, threshold, glossary, language=lang)
     ratio = len(flagged) / len(words)
 
     if ratio > max_ratio:
@@ -309,18 +496,20 @@ def auto_correct(
         )
         return [], LLMUsage()
 
+    model = _correction_model()
     log.info(
-        "auto_correct V2: %d/%d pre-flagged (%.0f%%), sending full context to LLM…",
-        len(flagged), len(words), ratio * 100,
+        "auto_correct V2: %d/%d pre-flagged (%.0f%%), model=%s, sending full context to LLM…",
+        len(flagged), len(words), ratio * 100, model or "(default)",
     )
+
+    if len(words) > _CHUNK_SIZE:
+        return _auto_correct_chunked(transcript, flagged, glossary, preset, model, sim_threshold)
 
     system, user = _build_prompts(transcript, flagged, glossary)
 
-    try:
-        raw, usage = chat_json(system, user, max_tokens=2048, temperature=0.0)
-    except Exception as exc:
-        log.error("auto_correct: LLM call failed: %s", exc)
-        return [], LLMUsage()
+    raw, usage = _call_correction_llm(system, user, model)
+    if raw is None:
+        return [], usage
 
     corrections_map = {
         normalize_persian(bad).lower(): normalize_persian(good)

@@ -125,6 +125,10 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 ## Content rules
 - Drop retakes: when the speaker restarts a sentence, keep ONLY the last good take
 - Drop false starts, fillers ("اِ", "uhm", "um", "hmm")
+- Drop off-camera talk: setup chatter, take numbers, camera operator questions
+  (e.g. "این دو، این یک… رکورد زدی الان دوباره؟", "چهارده رو اسکیپ می‌کنیم میایم رو پونزده",
+   "بزن رکورد", "ضبط کردی؟", counting takes, crew coordination).
+  These are NOT the speaker's message — cut them from the final edit.
 - Remove pauses already identified in the remove_ranges
 - Segments use SOURCE timeline times (in/out refer to the raw video)
 - Captions and B-roll use OUTPUT timeline times (after cuts/removals)

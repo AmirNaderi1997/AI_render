@@ -1,0 +1,5 @@
+{
+  "engine": "whisper",
+  "audio_seconds": 60.5,
+  "cost_usd": 0.0
+}

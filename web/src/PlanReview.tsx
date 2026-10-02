@@ -197,6 +197,9 @@ export default function PlanReview() {
             ASR cost: <b>${genStatus.asr_cost_usd.toFixed(4)}</b>
             {" "}({genStatus.asr_engine}, {genStatus.asr_audio_seconds?.toFixed(1)}s audio)
           </div>}
+          {genStatus.correction_model && <div>
+            Correction model: <b>{genStatus.correction_model}</b>
+          </div>}
         </div>
       )}
 

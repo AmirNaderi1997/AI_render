@@ -9,6 +9,7 @@ import pytest
 from brain.correct import (
     auto_correct,
     detect_suspect_words,
+    is_latin_word,
     load_glossary,
     normalize_persian,
 )
@@ -211,3 +212,81 @@ def test_glossary_loads_from_default_path():
     assert isinstance(glossary, dict)
     if glossary:
         assert "corrections" in glossary or "vocabulary" in glossary
+
+
+# ── Latin word detection in Persian transcripts ──────────────────────────────
+
+def test_is_latin_word():
+    assert is_latin_word("rekord") is True
+    assert is_latin_word("product") is True
+    assert is_latin_word("محصول") is False
+    assert is_latin_word("رکورد") is False
+    assert is_latin_word("test123") is True
+
+
+def test_latin_word_flagged_in_persian():
+    """Latin words in Persian transcripts are flagged for correction."""
+    words = _words(("rekord", 0.95), ("زدی", 0.92))
+    flagged = detect_suspect_words(words, threshold=0.60, glossary={}, language="fa")
+    assert len(flagged) == 1
+    assert flagged[0]["word"] == "rekord"
+    assert any("latin_in_persian" in r for r in flagged[0]["reasons"])
+
+
+def test_latin_word_not_flagged_in_english():
+    """Latin words are normal in English — no flag."""
+    words = _words(("record", 0.95), ("this", 0.92))
+    flagged = detect_suspect_words(words, threshold=0.60, glossary={}, language="en")
+    assert flagged == []
+
+
+def test_latin_word_allowed_if_in_glossary():
+    """Glossary-listed Latin brands/acronyms are allowed in Persian."""
+    glossary_with_brand = {
+        "vocabulary": ["iPhone", "محصول"],
+        "corrections": {},
+    }
+    words = _words(("iPhone", 0.95), ("محصول", 0.92))
+    flagged = detect_suspect_words(words, threshold=0.60, glossary=glossary_with_brand, language="fa")
+    assert flagged == []
+
+
+def test_latin_correction_via_llm():
+    """LLM is asked to convert Latin words to Persian with high confidence."""
+    transcript_with_latin = {
+        **TRANSCRIPT,
+        "words": _words(("rekord", 0.95), ("زدی", 0.92), ("بخر", 0.85)),
+        "sentences": [{"text": "rekord زدی بخر", "start": 0.0, "end": 1.4}],
+    }
+    llm_resp = {"corrections": [
+        {"index": 0, "old": "rekord", "new": "رکورد", "confidence": 0.98,
+         "reason": "Latin→Persian conversion", "type": "replace"}
+    ]}
+    with patch("brain.correct.chat_json", return_value=(llm_resp, _mock_usage())):
+        corrections, _ = auto_correct(transcript_with_latin, PRESET_WITH_THRESHOLD, GLOSSARY)
+    assert len(corrections) == 1
+    assert corrections[0]["new"] == "رکورد"
+
+
+# ── CORRECTION_MODEL env var ─────────────────────────────────────────────────
+
+def test_correction_model_env_passed_to_llm():
+    """CORRECTION_MODEL env var is forwarded to chat_json as model kwarg."""
+    llm_resp = {"corrections": []}
+    with patch.dict("os.environ", {"CORRECTION_MODEL": "gpt-test-model"}):
+        with patch("brain.correct.chat_json", return_value=(llm_resp, _mock_usage())) as mock_llm:
+            auto_correct(TRANSCRIPT, PRESET_WITH_THRESHOLD, GLOSSARY)
+    call_kwargs = mock_llm.call_args
+    assert call_kwargs[1].get("model") == "gpt-test-model"
+
+
+def test_correction_model_default_when_unset():
+    """Without CORRECTION_MODEL, chat_json is called without model kwarg."""
+    llm_resp = {"corrections": []}
+    with patch.dict("os.environ", {}, clear=False):
+        env = dict(**{k: v for k, v in __import__("os").environ.items() if k != "CORRECTION_MODEL"})
+        with patch.dict("os.environ", env, clear=True):
+            with patch("brain.correct.chat_json", return_value=(llm_resp, _mock_usage())) as mock_llm:
+                auto_correct(TRANSCRIPT, PRESET_WITH_THRESHOLD, GLOSSARY)
+    call_kwargs = mock_llm.call_args
+    assert call_kwargs[1].get("model") is None
