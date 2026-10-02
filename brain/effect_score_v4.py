@@ -270,7 +270,7 @@ def _identify_edit_story(segments: list[dict], analyses: list[dict]) -> dict[str
     # Hook: first segment
     moments[segments[0]["id"]] = "hook"
 
-    # CTA: last segment with "cta" style caption
+    # CTA: last segment
     if segments:
         moments[segments[-1]["id"]] = "cta"
 
@@ -286,9 +286,11 @@ def _identify_edit_story(segments: list[dict], analyses: list[dict]) -> dict[str
     if segments and peak_idx < len(segments):
         moments[segments[peak_idx]["id"]] = "peak"
 
-    # Calm: segment before CTA
+    # Calm: segment before CTA (but don't overwrite hook or peak)
     if len(segments) > 1:
-        moments[segments[-2]["id"]] = "calm"
+        calm_seg_id = segments[-2]["id"]
+        if calm_seg_id not in moments:  # Don't overwrite existing assignments
+            moments[calm_seg_id] = "calm"
 
     return moments
 

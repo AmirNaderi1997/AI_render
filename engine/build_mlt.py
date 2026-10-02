@@ -8,7 +8,7 @@ from typing import Optional
 from xml.sax.saxutils import escape as esc
 
 from .schema import Plan, PROJECT_ROOT
-from .effects import effect_filter_xml
+from .effects_v4 import effect_filter_xml_v4 as effect_filter_xml
 from .captions import (
     STYLE_NAMES,
     load_style,

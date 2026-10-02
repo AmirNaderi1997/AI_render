@@ -23,9 +23,11 @@ import yaml
 
 from engine.schema import PROJECT_ROOT, EditPlan, format_error, validate_plan
 from engine.effects import MOTIONS, LIGHTS, EFFECT_CATALOG, EFFECT_FAMILIES, families_for_llm
+from engine.effects_v4 import MyEffectsPreset, EffectFeedback
 from .llm import LLMUsage, chat_json
 from .segment_analysis import analyse_segments
-from .effect_score import select_effects_with_llm, critic_effect_pass
+from .effect_score import critic_effect_pass
+from .effect_score_v4 import select_effects_with_vision
 from .signals import measure_segment_signals
 
 log = logging.getLogger(__name__)
@@ -287,15 +289,36 @@ def _caption_review(plan_data: dict, transcript: dict) -> list[dict]:
 def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dict, preset: dict) -> LLMUsage:
     """Run the effect scorer + critic pass, write results into plan_data in-place.
 
+    Uses V4 vision-aware scorer with user preferences.
     Returns combined LLM usage from both calls.
     """
     segments = plan_data.get("segments", [])
     if not segments or not analyses:
         return LLMUsage()
 
-    scored_effects, sel_usage = select_effects_with_llm(segments, analyses, transcript, preset)
+    # Load My Effects preferences if available
+    my_effects = MyEffectsPreset()
+    feedback = EffectFeedback()
 
-    # Convert scorer output → plan visual_effects (strip private _family/_reason keys)
+    # Call V4 scorer with vision model support (keyframes not available here, so None)
+    scored_v4 = select_effects_with_vision(
+        segments, analyses, None, preset,
+        my_effects=my_effects,
+        feedback=feedback
+    )
+
+    # Convert V4 output to critic-compatible format
+    scored_effects = []
+    for eff_v4 in scored_v4:
+        scored_effects.append({
+            "segment_id": eff_v4["segment_id"],
+            "type": eff_v4["type"],
+            "_family": eff_v4["type"].split("__")[0] if "__" in eff_v4["type"] else "still",
+            "_reason": eff_v4.get("reason", ""),
+            "_intensity": 2,  # Placeholder
+        })
+
+    # Apply critic pass
     total_dur = sum(s.get("out", 0) - s.get("in", 0) for s in segments)
     scored_effects, crit_usage = critic_effect_pass(scored_effects, analyses, total_dur, preset)
 
@@ -315,11 +338,12 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
         for e in scored_effects
     ]
 
+    # V4 scorer doesn't make LLM calls; critic pass does
     combined = LLMUsage()
-    combined.input_tokens = sel_usage.input_tokens + crit_usage.input_tokens
-    combined.output_tokens = sel_usage.output_tokens + crit_usage.output_tokens
-    combined.model = sel_usage.model or crit_usage.model
-    combined.elapsed_sec = sel_usage.elapsed_sec + crit_usage.elapsed_sec
+    combined.input_tokens = crit_usage.input_tokens
+    combined.output_tokens = crit_usage.output_tokens
+    combined.model = crit_usage.model
+    combined.elapsed_sec = crit_usage.elapsed_sec
     return combined
 
 
