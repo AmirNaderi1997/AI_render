@@ -391,7 +391,7 @@ class EffectFeedback:
 # ============================================================================
 
 def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
-                         punch_frames: int) -> str:
+                         punch_frames: int, cover_scale: float = 1.0) -> str:
     """Generate MLT filter XML for v4 effects.
 
     Falls back to v3 rendering if effect not found.
@@ -400,29 +400,28 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
     from engine.effects import effect_filter_xml as legacy_render
 
     if effect_id not in EXTENDED_EFFECTS:
-        # Use v3 rendering for legacy effects
-        return legacy_render(effect_id, frames, width, height, punch_frames)
+        return legacy_render(effect_id, frames, width, height, punch_frames,
+                             cover_scale=cover_scale)
 
     spec = EXTENDED_EFFECTS[effect_id]
     result = ""
+    cs = cover_scale
 
     # Camera shake: use frei0r/Perlin noise if available, else affine-based jitter
     if effect_id == "camera_shake":
         intensity = spec["params"].get("intensity", 2)
         freq = spec["params"].get("frequency", 8)
-        # Simplified: affine with random offsets (real version: frei0r shaker or custom filter)
         result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0=0 0 {width} {height} 1</property>
+            <property name="transition.rect">0={_rect(1.0 * cs, width, height)}</property>
             <property name="transition.fill">1</property>
         </filter>"""
 
     # Freeze frame + zoom
     elif effect_id == "freeze_frame_zoom":
-        # Hold first frame, then zoom
         zoom_to = spec["params"].get("zoom_to", 1.3)
         hold_f = min(spec["params"].get("hold_frames", 3), frames - 1)
         result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0={_rect(1.0, width, height)};{hold_f}={_rect(zoom_to, width, height)}</property>
+            <property name="transition.rect">0={_rect(1.0 * cs, width, height)};{hold_f}={_rect(zoom_to * cs, width, height)}</property>
             <property name="transition.fill">1</property>
         </filter>"""
 
@@ -474,7 +473,7 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
         blur = spec["params"].get("blur_strength", 0.8)
         zoom = spec["params"].get("zoom_out", 1.5)
         result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0={_rect(1.0, width, height)};{frames-1}={_rect(zoom, width, height)}</property>
+            <property name="transition.rect">0={_rect(1.0 * cs, width, height)};{frames-1}={_rect(zoom * cs, width, height)}</property>
         </filter>
         <filter mlt_service="boxblur"><property name="radius">{blur * 10},0</property></filter>"""
 

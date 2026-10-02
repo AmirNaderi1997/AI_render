@@ -8,6 +8,7 @@ from typing import Optional
 from xml.sax.saxutils import escape as esc
 
 from .schema import Plan, PROJECT_ROOT
+from .probe import cover_scale as _compute_cover_scale, video_dimensions
 from .effects_v4 import effect_filter_xml_v4 as effect_filter_xml
 from .captions import (
     STYLE_NAMES,
@@ -45,6 +46,12 @@ def build(
     style = load_style(style_name)
     punch_frames = int(style.get("zoom", {}).get("punch_frames", 6))
     music_fade = float(style.get("music", {}).get("fade_out", 0.8))
+
+    try:
+        src_w, src_h = video_dimensions(Path(resolve(plan.source)))
+    except Exception:
+        src_w, src_h = W, H
+    cs = _compute_cover_scale(src_w, src_h, W, H)
 
     ass_path = out_dir / "captions.ass"
     write_ass(plan, style, ass_path)
@@ -86,9 +93,10 @@ def build(
     for s in plan.segments:
         n = f(s.out) - f(s.in_)
         if s.id in effects:
-            filter_xml = effect_filter_xml(effects[s.id], n, W, H, punch_frames)
+            filter_xml = effect_filter_xml(effects[s.id], n, W, H, punch_frames,
+                                           cover_scale=cs)
         else:
-            z_from, z_to = s.zoom.from_, s.zoom.to
+            z_from, z_to = s.zoom.from_ * cs, s.zoom.to * cs
             if abs(z_from - z_to) < 1e-6:
                 kf = f'0={_rect(z_from, W, H)}'
             else:

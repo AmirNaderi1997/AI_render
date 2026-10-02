@@ -231,11 +231,14 @@ def _rect(z: float, width: int, height: int, x: float = 0.5, y: float = 0.5) -> 
 
 
 def _motion_keyframes(motion: str, frames: int, width: int, height: int,
-                      punch_frames: int) -> str | None:
+                      punch_frames: int, cover_scale: float = 1.0) -> str | None:
     last = max(1, frames - 1)
     short = min(max(1, punch_frames), last)
-    r = lambda z, x=0.5, y=0.5: _rect(z, width, height, x, y)
+    cs = cover_scale
+    r = lambda z, x=0.5, y=0.5: _rect(z * cs, width, height, x, y)
     if motion == "steady":
+        if cs > 1.01:
+            return f"0={r(1.0)}"
         return None
     if motion == "hold_close":
         return f"0={r(1.10)}"
@@ -273,9 +276,10 @@ def _light_keyframes(light: str, frames: int) -> str | None:
 
 
 def effect_filter_xml(effect_id: str, frames: int, width: int, height: int,
-                      punch_frames: int) -> str:
+                      punch_frames: int, cover_scale: float = 1.0) -> str:
     spec = EFFECT_CATALOG[canonical_effect(effect_id)]
-    motion = _motion_keyframes(spec["motion"], frames, width, height, punch_frames)
+    motion = _motion_keyframes(spec["motion"], frames, width, height, punch_frames,
+                               cover_scale=cover_scale)
     light = _light_keyframes(spec["light"], frames)
     result = ""
     if motion:

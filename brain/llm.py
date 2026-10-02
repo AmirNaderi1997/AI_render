@@ -184,7 +184,7 @@ def _anthropic_call(
         model=model,
         elapsed_sec=round(time.monotonic() - t0, 2),
     )
-    _log_usage(usage)
+    _log_usage(usage, provider="anthropic", call_type="text")
     return _extract_json(text), usage
 
 
@@ -219,7 +219,7 @@ def _anthropic_vision_call(
         model=model,
         elapsed_sec=round(time.monotonic() - t0, 2),
     )
-    _log_usage(usage)
+    _log_usage(usage, provider="anthropic", call_type="vision")
     return text, usage
 
 
@@ -250,7 +250,7 @@ def _openai_call(
         model=model,
         elapsed_sec=round(time.monotonic() - t0, 2),
     )
-    _log_usage(usage)
+    _log_usage(usage, provider="openai", call_type="text")
     return _extract_json(text), usage
 
 
@@ -284,7 +284,8 @@ def _openai_compatible_call(
         model=model,
         elapsed_sec=round(time.monotonic() - t0, 2),
     )
-    _log_usage(usage, preset=preset)
+    _log_usage(usage, preset=preset, provider=preset, base_url=base_url,
+               call_type="text")
     return _extract_json(text), usage
 
 
@@ -335,7 +336,11 @@ def _openai_vision_call(
         model=model,
         elapsed_sec=round(time.monotonic() - t0, 2),
     )
-    _log_usage(usage, preset=preset)
+    base_url_val = ""
+    if preset in ("openai_compatible", "jarvis"):
+        _, base_url_val = _resolve_preset(preset)
+    _log_usage(usage, preset=preset, provider=preset, base_url=base_url_val,
+               call_type="vision")
     return text, usage
 
 
@@ -375,8 +380,16 @@ def _encode_image(img: Union[str, Path, bytes]) -> tuple[str, str]:
     return base64.b64encode(raw).decode(), media_type
 
 
-def _log_usage(usage: LLMUsage, *, preset: str = "") -> None:
+def _log_usage(usage: LLMUsage, *, preset: str = "",
+               provider: str = "", base_url: str = "",
+               call_type: str = "text") -> None:
     tag = f" ({preset})" if preset else ""
+    url_tag = f" base_url={base_url}" if base_url else ""
+    print(
+        f"[LLM {call_type}] model={usage.model} provider={provider or 'default'}"
+        f"{url_tag}{tag}: {usage.input_tokens} in / {usage.output_tokens} out, "
+        f"~${usage.cost_estimate:.4f}, {usage.elapsed_sec:.1f}s"
+    )
     log.info(
         "LLM %s%s: %d in / %d out tokens, ~$%.4f, %.1fs",
         usage.model, tag,
