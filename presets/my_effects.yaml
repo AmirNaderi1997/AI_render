@@ -1,0 +1,15 @@
+custom_assets: {}
+dislikes: []
+favorites:
+  hold_close__fade_out:
+    tags: []
+    weight: 1
+  punch__fade_out:
+    tags: []
+    weight: 1
+  steady__neutral:
+    tags: []
+    weight: 1
+rules:
+- priority: hard
+  text: زوم نکن

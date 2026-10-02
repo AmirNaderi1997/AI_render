@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
+import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional
@@ -286,7 +288,40 @@ def _caption_review(plan_data: dict, transcript: dict) -> list[dict]:
     return warnings
 
 
-def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dict, preset: dict) -> LLMUsage:
+def _extract_keyframes(segments: list[dict], raw_video: Path, keyframe_dir: Path) -> Path:
+    """Extract 512px keyframes from segment midpoints using ffmpeg.
+
+    Returns keyframe_dir path (created if needed).
+    """
+    keyframe_dir.mkdir(parents=True, exist_ok=True)
+
+    for seg in segments:
+        seg_id = seg["id"]
+        in_time = seg["in"]
+        out_time = seg["out"]
+        midpoint = (in_time + out_time) / 2.0
+
+        keyframe_path = keyframe_dir / f"{seg_id}.jpg"
+
+        # Extract 1 keyframe at midpoint, scale to 512 width (maintain aspect)
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(midpoint), "-i", str(raw_video),
+                "-vf", "scale=512:-1",
+                "-vframes", "1",
+                "-q:v", "3",
+                str(keyframe_path),
+            ], capture_output=True, check=True, timeout=5)
+            log.debug(f"Extracted keyframe for {seg_id} at {midpoint:.2f}s to {keyframe_path.name}")
+        except subprocess.TimeoutExpired:
+            log.warning(f"Keyframe extraction timed out for {seg_id}")
+        except Exception as e:
+            log.warning(f"Failed to extract keyframe for {seg_id}: {e}")
+
+    return keyframe_dir
+
+
+def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dict, preset: dict, raw_video: Optional[Path] = None) -> LLMUsage:
     """Run the effect scorer + critic pass, write results into plan_data in-place.
 
     Uses V4 vision-aware scorer with user preferences.
@@ -300,9 +335,16 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     my_effects = MyEffectsPreset()
     feedback = EffectFeedback()
 
-    # Call V4 scorer with vision model support (keyframes not available here, so None)
+    # Keyframe extraction disabled for now (will be done in critic pass)
+    # Extract keyframes for vision model if raw video available
+    keyframe_dir = None
+    # if raw_video and raw_video.exists():
+    #     keyframe_dir = Path(tempfile.mkdtemp(prefix="keyframes_"))
+    #     _extract_keyframes(segments, raw_video, keyframe_dir)
+
+    # Call V4 scorer with text-based scoring
     scored_v4 = select_effects_with_vision(
-        segments, analyses, None, preset,
+        segments, analyses, keyframe_dir, preset,
         my_effects=my_effects,
         feedback=feedback
     )
@@ -437,7 +479,7 @@ def generate_plan(
 
                 if on_progress:
                     on_progress("selecting effects…")
-                eff_usage = _apply_scored_effects(plan_data, analyses, transcript, preset)
+                eff_usage = _apply_scored_effects(plan_data, analyses, transcript, preset, raw_video=src_path)
                 total_usage.input_tokens += eff_usage.input_tokens
                 total_usage.output_tokens += eff_usage.output_tokens
                 total_usage.elapsed_sec += eff_usage.elapsed_sec

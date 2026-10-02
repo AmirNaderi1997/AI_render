@@ -116,17 +116,18 @@ def score_families_with_vision(
                     scores_dict[new_fam] = scores_dict[new_fam] + 2.0  # Slight boost
 
     # Vision model scoring (if keyframe available)
-    if keyframe_path and keyframe_path.exists():
-        vision_scores = _score_with_vision_model(
-            keyframe_path,
-            segment_analysis,
-            list(scores_dict.keys()),
-            style
-        )
-        # Blend vision scores into base scores (20% vision, 80% text)
-        for fam, v_score in vision_scores.items():
-            if fam in scores_dict:
-                scores_dict[fam] = scores_dict[fam] * 0.8 + v_score * 0.2
+    # Disabled for now due to potential timeout issues; will be integrated in critic pass
+    # if keyframe_path and keyframe_path.exists():
+    #     vision_scores = _score_with_vision_model(
+    #         keyframe_path,
+    #         segment_analysis,
+    #         list(scores_dict.keys()),
+    #         style
+    #     )
+    #     # Blend vision scores into base scores (20% vision, 80% text)
+    #     for fam, v_score in vision_scores.items():
+    #         if fam in scores_dict:
+    #             scores_dict[fam] = scores_dict[fam] * 0.8 + v_score * 0.2
 
     # Convert back to sorted list
     results = [(fam, score) for fam, score in scores_dict.items() if score >= 0]
@@ -142,19 +143,60 @@ def _score_with_vision_model(
 ) -> dict[str, float]:
     """Score families based on visual content using a vision model.
 
-    Checks EFFECT_MODEL env var to pick model (claude-opus-5-5, claude-sonnet-5-5, etc.).
+    Uses VISION_MODEL env var (default: gpt-5-5-image).
     Falls back to text-only if model unavailable.
     """
-
-    model_name = os.getenv("EFFECT_MODEL", "claude-opus-5-5")
+    from brain.llm import chat_vision
 
     try:
-        # Would use an LLM vision API here (Claude, GPT-4V, etc.)
-        # For now: placeholder that returns balanced scores
-        log.info(f"Vision model {model_name} would analyze {keyframe_path.name}")
+        # Build vision prompt
+        text_analysis = segment_analysis.get("text", "")
+        role = segment_analysis.get("role", "")
+        intensity = segment_analysis.get("intensity", 1)
 
-        # Placeholder: return neutral scores (no vision model integrated yet)
-        return {fam: 0.0 for fam in candidate_families}
+        system_prompt = f"""You are an expert video editor analyzing a keyframe to recommend effects.
+
+Segment context:
+- Role: {role}
+- Text: {text_analysis[:100] if text_analysis else "(no text)"}
+- Intensity: {intensity}/5
+- Available effects: {', '.join(candidate_families)}
+
+Analyze the visual content and recommend which effects would work best for this segment.
+Consider: composition, face size, framing, motion, lighting, and the segment's narrative role."""
+
+        user_prompt = f"""Analyze this keyframe and score the following effect families from 0-100:
+{', '.join(candidate_families)}
+
+For each effect, provide:
+1. Score (0-100): how well does it fit the visual content?
+2. Reason: why this effect works (face size, motion, composition clues)
+3. Chosen effect: if you had to pick one, which would you use and why?
+
+Format your response as JSON with keys: scores (dict of family->score), chosen_effect, reason."""
+
+        response, usage = chat_vision(
+            system=system_prompt,
+            user=user_prompt,
+            images=[keyframe_path],
+            return_json=True,
+        )
+
+        log.info(
+            f"Vision {usage.model}: {len(candidate_families)} effects, "
+            f"{usage.input_tokens} in / {usage.output_tokens} out, "
+            f"{usage.elapsed_sec}s, ${usage.cost_estimate:.4f}"
+        )
+
+        # Extract scores from response
+        scores = response.get("scores", {})
+        # Normalize to 0-100 range
+        result = {}
+        for fam in candidate_families:
+            score = scores.get(fam, 0)
+            result[fam] = max(0, min(100, float(score)))
+
+        return result
 
     except Exception as e:
         log.warning(f"Vision model failed, falling back to text-only: {e}")
