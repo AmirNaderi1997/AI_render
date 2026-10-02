@@ -75,6 +75,13 @@ def test_visual_effect_validation():
     assert any("unknown segments" in error for error in errors)
 
 
+def test_v4_effect_is_valid_in_plan():
+    plan, errors = _v({**BASE_PLAN, "visual_effects": [
+        {"segment_id": "s1", "type": "text_pop_scale"}]})
+    assert not errors
+    assert plan.visual_effects[0].type == "text_pop_scale"
+
+
 def test_caption_bounds():
     p = {**BASE_PLAN, "captions": [{"start": 3, "end": 3, "text": "x"}]}
     _, errs = _v(p)

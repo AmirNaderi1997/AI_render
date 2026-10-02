@@ -20,8 +20,29 @@ from engine.effects_v4 import (
     EFFECT_FAMILIES_V4, EFFECT_CATALOG_V4, MyEffectsPreset, EffectFeedback
 )
 from .effect_score import score_families as score_families_text_only
+from .llm import LLMUsage
 
 log = logging.getLogger(__name__)
+
+_V4_ROLE_SCORES = {
+    "number": {"text_pop": 12, "flash_black": 10, "freeze_zoom": 10},
+    "claim": {"text_pop": 10, "vignette_pulse": 7},
+    "hook": {"blur_in": 9, "text_pop": 9, "flash_white": 8},
+    "question": {"vignette_pulse": 10, "blur_in": 6},
+    "emotion": {"vignette_pulse": 12, "blur_in": 8},
+    "contrast": {"bw_flash": 11, "flash_black": 8},
+    "transition": {"blur_in": 10, "light_leak": 8},
+    "cta": {"text_pop": 10, "flash_white": 8},
+}
+_VERIFIED_V4_FAMILIES = {"blur_in", "vignette_pulse"}
+
+
+def _is_zoom_effect(effect_id: str) -> bool:
+    if "zoom" in effect_id:
+        return True
+    if "__" in effect_id:
+        return effect_id.split("__", 1)[0] != "steady"
+    return False
 
 # ============================================================================
 # VISION-AWARE SCORING
@@ -54,6 +75,22 @@ def score_families_with_vision(
 
     # Start with text-only scoring
     scores_dict = dict(score_families_text_only(segment_analysis, prev_family, prev_prev_family, accent_debt, style))
+    role = segment_analysis.get("role", "explanation")
+    energy = float(segment_analysis.get("energy", 2))
+    for family, info in EFFECT_FAMILIES_V4.items():
+        if family in scores_dict:
+            continue
+        if family not in _VERIFIED_V4_FAMILIES:
+            continue
+        score = 2.0 + max(0.0, 3.0 - abs(energy - info["energy"]))
+        score += _V4_ROLE_SCORES.get(role, {}).get(family, 0)
+        if role in info.get("best_roles", []):
+            score += 3.0
+        if family == prev_family:
+            score -= 6.0
+        if family == prev_prev_family:
+            score -= 3.0
+        scores_dict[family] = max(0.0, score)
 
     # Apply my_effects rules if provided
     if my_effects:
@@ -61,14 +98,19 @@ def score_families_with_vision(
         hard_exclusions = set()
         hard_boosts = {}
 
+        no_zoom = False
         for rule in my_effects.rules:
             rule_text = rule.get("text", "").lower()
+            if any(phrase in rule_text for phrase in ("زوم نکن", "بدون زوم", "no zoom", "don't zoom")):
+                no_zoom = True
+                continue
             # Parse simple heuristics from rule text (e.g., "zoom on numbers" → boost punch, flash)
-            if any(w in rule_text for w in ["زوم", "zoom", "سریع", "fast", "punch"]):
+            if (role == "number" and any(w in rule_text for w in ("اعداد", "آمار", "number", "stat"))
+                    and any(w in rule_text for w in ("زوم", "zoom", "punch"))):
                 hard_boosts["punch"] = hard_boosts.get("punch", 0) + 3
                 hard_boosts["punch_bright"] = hard_boosts.get("punch_bright", 0) + 3
                 hard_boosts["flash"] = hard_boosts.get("flash", 0) + 2
-            if any(w in rule_text for w in ["آروم", "calm", "slow", "نرم", "soft"]):
+            if role in ("cta", "conclusion", "transition") and any(w in rule_text for w in ["آروم", "calm", "slow", "نرم", "soft"]):
                 hard_boosts["breathe"] = hard_boosts.get("breathe", 0) + 2
                 hard_boosts["slow_push"] = hard_boosts.get("slow_push", 0) + 2
             if any(w in rule_text for w in ["هیچ", "never", "نزن", "dont"]):
@@ -85,16 +127,20 @@ def score_families_with_vision(
         # Apply favorites with weight multiplier
         for fav_id, fav_info in my_effects.favorites.items():
             weight = fav_info.get("weight", 1.0)
-            # Map effect_id back to family (simplified: assume effect name contains family)
-            for fam_name in scores_dict:
-                if fam_name in fav_id or fav_id in fam_name:
-                    scores_dict[fam_name] = scores_dict[fam_name] * (1.0 + weight * 0.5)
+            for fam_name, info in EFFECT_FAMILIES_V4.items():
+                if fav_id in info.get("ids", []) and fam_name in scores_dict:
+                    scores_dict[fam_name] *= 1.0 + float(weight) * 0.5
 
         # Apply dislikes (never use)
         for dislike_id in my_effects.dislikes:
-            for fam_name in scores_dict:
-                if fam_name in dislike_id or dislike_id in fam_name:
-                    scores_dict[fam_name] = -100  # Exclude
+            for fam_name, info in EFFECT_FAMILIES_V4.items():
+                if dislike_id == fam_name or dislike_id in info.get("ids", []):
+                    scores_dict[fam_name] = -100
+
+        if no_zoom:
+            for fam_name, info in EFFECT_FAMILIES_V4.items():
+                if any(_is_zoom_effect(effect_id) for effect_id in info.get("ids", [])):
+                    scores_dict[fam_name] = -100
 
         # Remove hard exclusions
         for exc in hard_exclusions:
@@ -210,6 +256,7 @@ def select_effects_with_vision(
     style: dict,
     my_effects: Optional[MyEffectsPreset] = None,
     feedback: Optional[EffectFeedback] = None,
+    vision_usage: Optional[list[LLMUsage]] = None,
 ) -> list[dict]:
     """Plan effects for all segments as a coherent reel story.
 
@@ -228,6 +275,7 @@ def select_effects_with_vision(
     # Identify hook (first segment), build (middle), peak (climax), calm (before CTA), CTA
     story_moments = _identify_edit_story(segments, analyses)
 
+    vision_indices = {0, len(segments) // 2, len(segments) - 1} if keyframe_dir else set()
     for i, (seg, ana) in enumerate(zip(segments, analyses)):
         seg_id = seg["id"]
         seg_in = seg["in"]
@@ -243,6 +291,27 @@ def select_effects_with_vision(
             ana, keyframe, prev_family, prev_prev_family, accent_debt, style,
             my_effects, feedback
         )
+        vision_answer = None
+        if i in vision_indices and keyframe and keyframe.exists() and scores:
+            from .llm import chat_vision
+            candidates = [family for family, _ in scores[:8]]
+            try:
+                vision_answer, usage = chat_vision(
+                    system="You are a careful video editor. Describe only visible framing and choose one suitable effect family. Return JSON.",
+                    user=(f"Segment role: {ana.get('role', 'unknown')}; spoken text: {ana.get('text', '')[:180]}. "
+                          f"Candidate families: {', '.join(candidates)}. "
+                          "Return JSON keys face_size, framing, chosen_effect, reason. "
+                          "chosen_effect must be one candidate. Respect the user's no-zoom rule where applicable."),
+                    images=[keyframe], return_json=True, max_tokens=300,
+                )
+                if vision_usage is not None:
+                    vision_usage.append(usage)
+                choice = vision_answer.get("chosen_effect")
+                if choice in candidates:
+                    scores = sorted([(fam, score + (5.0 if fam == choice else 0.0))
+                                     for fam, score in scores], key=lambda pair: -pair[1])
+            except Exception as exc:
+                log.warning("vision analysis failed for %s: %s", seg_id, exc)
 
         if not scores:
             scores = [("still", 1.0)]
@@ -251,19 +320,19 @@ def select_effects_with_vision(
 
         # Check story moment to boost/adjust family
         moment = story_moments.get(seg_id)
-        if moment == "hook":
+        if moment == "hook" and not my_effects:
             # Boost high-energy families
             for fam, score in scores:
                 if fam in {"punch_bright", "flash", "punch"}:
                     chosen_family = fam
                     break
-        elif moment == "peak":
+        elif moment == "peak" and not my_effects:
             # Strongest effect on peak
             for fam, score in scores:
                 if fam in {"punch_bright", "flash_end", "freeze_zoom"}:
                     chosen_family = fam
                     break
-        elif moment == "cta":
+        elif moment == "cta" and not my_effects:
             # End with flash_end or punch_bright
             for fam, score in scores:
                 if fam in {"flash_end", "punch_bright", "lift"}:
@@ -278,12 +347,18 @@ def select_effects_with_vision(
             effect_ids = family_info.get("ids", ["steady__neutral"])
             effect_id = effect_ids[i % len(effect_ids)]  # Rotate for variety
 
-        reason = f"Story moment: {moment or 'build'}; family: {chosen_family}; text score: {scores[0][1]:.1f}"
+        reason = (f"Role {ana.get('role', 'unknown')}; story moment {moment or 'build'}; "
+                  f"family {chosen_family}; score {dict(scores).get(chosen_family, 0):.1f}")
+        if vision_answer and vision_answer.get("chosen_effect") == chosen_family:
+            reason += f"; vision: {vision_answer.get('reason', '')[:180]}"
 
         effects.append({
             "segment_id": seg_id,
             "type": effect_id,
+            "family": chosen_family,
             "reason": reason,
+            "source": "vision" if vision_answer and vision_answer.get("chosen_effect") == chosen_family else "favorite" if my_effects and effect_id in my_effects.favorites else "rule" if my_effects and my_effects.rules else "analysis",
+            "vision": vision_answer,
         })
 
         # Update state for next segment

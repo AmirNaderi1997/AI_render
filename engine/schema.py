@@ -49,6 +49,9 @@ class VisualEffect(BaseModel):
     @field_validator("type")
     @classmethod
     def _known_effect(cls, value: str) -> str:
+        from .effects_v4 import EXTENDED_EFFECTS
+        if value in EXTENDED_EFFECTS:
+            return value
         from .effects import canonical_effect
         return canonical_effect(value)
 

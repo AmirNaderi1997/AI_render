@@ -335,18 +335,19 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     my_effects = MyEffectsPreset()
     feedback = EffectFeedback()
 
-    # Keyframe extraction disabled for now (will be done in critic pass)
-    # Extract keyframes for vision model if raw video available
     keyframe_dir = None
-    # if raw_video and raw_video.exists():
-    #     keyframe_dir = Path(tempfile.mkdtemp(prefix="keyframes_"))
-    #     _extract_keyframes(segments, raw_video, keyframe_dir)
+    if raw_video and raw_video.exists():
+        keyframe_dir = raw_video.parent.parent / "keyframes"
+        keyframe_dir.mkdir(exist_ok=True)
+        chosen_indices = {0, len(segments) // 2, len(segments) - 1}
+        _extract_keyframes([segments[i] for i in sorted(chosen_indices)], raw_video, keyframe_dir)
 
     # Call V4 scorer with text-based scoring
+    vision_usages = []
     scored_v4 = select_effects_with_vision(
         segments, analyses, keyframe_dir, preset,
         my_effects=my_effects,
-        feedback=feedback
+        feedback=feedback, vision_usage=vision_usages,
     )
 
     # Convert V4 output to critic-compatible format
@@ -355,14 +356,25 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
         scored_effects.append({
             "segment_id": eff_v4["segment_id"],
             "type": eff_v4["type"],
-            "_family": eff_v4["type"].split("__")[0] if "__" in eff_v4["type"] else "still",
+            "_family": eff_v4.get("family", "still"),
             "_reason": eff_v4.get("reason", ""),
             "_intensity": 2,  # Placeholder
+            "_source": eff_v4.get("source", "analysis"),
+            "_vision": eff_v4.get("vision"),
         })
 
     # Apply critic pass
     total_dur = sum(s.get("out", 0) - s.get("in", 0) for s in segments)
-    scored_effects, crit_usage = critic_effect_pass(scored_effects, analyses, total_dur, preset)
+    no_zoom = any("زوم نکن" in rule.get("text", "") or "no zoom" in rule.get("text", "").lower()
+                  for rule in my_effects.rules)
+    if no_zoom:
+        crit_usage = LLMUsage()
+    else:
+        original_types = {effect["segment_id"]: effect["type"] for effect in scored_effects}
+        scored_effects, crit_usage = critic_effect_pass(scored_effects, analyses, total_dur, preset)
+        for effect in scored_effects:
+            if effect["type"] != original_types.get(effect["segment_id"]):
+                effect["_source"] = "rule"
 
     plan_data["visual_effects"] = [
         {"segment_id": e["segment_id"], "type": e["type"]}
@@ -374,18 +386,19 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
             "segment_id": e["segment_id"],
             "family": e.get("_family", ""),
             "reason": e.get("_reason", ""),
+            "source": e.get("_source", "analysis"),
+            "vision": e.get("_vision"),
             "intensity": e.get("_intensity", 2),
             "emphasis_start": e.get("_emphasis_start"),
         }
         for e in scored_effects
     ]
 
-    # V4 scorer doesn't make LLM calls; critic pass does
     combined = LLMUsage()
-    combined.input_tokens = crit_usage.input_tokens
-    combined.output_tokens = crit_usage.output_tokens
-    combined.model = crit_usage.model
-    combined.elapsed_sec = crit_usage.elapsed_sec
+    combined.input_tokens = crit_usage.input_tokens + sum(u.input_tokens for u in vision_usages)
+    combined.output_tokens = crit_usage.output_tokens + sum(u.output_tokens for u in vision_usages)
+    combined.model = crit_usage.model or (vision_usages[-1].model if vision_usages else "")
+    combined.elapsed_sec = crit_usage.elapsed_sec + sum(u.elapsed_sec for u in vision_usages)
     return combined
 
 
@@ -489,6 +502,7 @@ def generate_plan(
         else:
             _ensure_visual_effects(plan_data)
 
+        _clamp_output_events(plan_data)
         plan_data["caption_review"] = _caption_review(plan_data, transcript)
 
         plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
@@ -528,6 +542,29 @@ def _clamp_segments(plan_data: dict, job_dir: Path, source_rel: str) -> None:
             seg["out"] = round(src_dur, 6)
         if seg_in > src_dur:
             seg["in"] = round(src_dur, 6)
+
+
+def _clamp_output_events(plan_data: dict) -> None:
+    """Trim model output events to the duration of its kept source segments."""
+    duration = sum(s["out"] - s["in"] for s in plan_data.get("segments", []))
+    for key in ("captions",):
+        events = []
+        for event in plan_data.get(key, []):
+            if event["start"] >= duration:
+                continue
+            event["end"] = round(min(event["end"], duration), 3)
+            if event["end"] > event["start"]:
+                events.append(event)
+        plan_data[key] = events
+    if plan_data.get("music"):
+        ducks = []
+        for duck in plan_data["music"].get("duck", []):
+            if duck["start"] >= duration:
+                continue
+            duck["end"] = round(min(duck["end"], duration), 3)
+            if duck["end"] > duck["start"]:
+                ducks.append(duck)
+        plan_data["music"]["duck"] = ducks
 
 
 def _check_media_soft(plan_data: dict, job_dir: Path) -> list[str]:

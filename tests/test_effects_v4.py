@@ -57,6 +57,19 @@ class TestNewEffectsRender:
             # Filters should not have <clip> or duration-changing elements
             assert "<clip" not in xml or "duration" not in xml
 
+    def test_selected_v4_filters_use_installed_mlt_services(self):
+        blur = effect_filter_xml_v4("blur_in", 60, 1080, 1920, 5)
+        vignette = effect_filter_xml_v4("vignette_pulse", 60, 1080, 1920, 5)
+        assert 'mlt_service="boxblur"' in blur and 'name="blur"' in blur
+        assert 'mlt_service="vignette"' in vignette and 'name="opacity"' in vignette
+
+    def test_v4_preserves_portrait_cover_for_landscape_source(self):
+        xml = effect_filter_xml_v4("vignette_pulse", 60, 1080, 1920, 5,
+                                   cover_scale=3.16049)
+        assert 'mlt_service="affine"' in xml
+        assert 'transition.fill' in xml
+        assert 'mlt_service="vignette"' in xml
+
 
 class TestMyEffects:
     """My Effects system: favorites, rules, dislikes, weights."""
@@ -220,6 +233,21 @@ class TestVisionAwareScoring:
         # Should return valid scores
         assert len(scores) > 0
         assert all(isinstance(s[0], str) and isinstance(s[1], float) for s in scores)
+
+    def test_saved_no_zoom_rule_excludes_zoom_and_v4_can_win(self, tmp_path):
+        me = MyEffectsPreset(tmp_path / "my_effects.yaml")
+        me.add_rule("زوم نکن", priority="hard")
+        me.add_favorite("steady__neutral", weight=1.1)
+        scores = score_families_with_vision(
+            {"role": "emotion", "energy": 2, "text": "a personal moment"},
+            None, None, None, 0, {"effects": {}}, my_effects=me,
+        )
+        families = dict(scores)
+        assert "punch" not in families
+        assert "slow_push" not in families
+        assert "flash" not in families
+        assert "flash_end" not in families
+        assert scores[0][0] == "vignette_pulse"
 
 
 class TestEditStoryPlanning:

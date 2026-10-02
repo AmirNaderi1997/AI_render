@@ -153,7 +153,9 @@ def test_planner_generates_valid_plan(tmp_path):
 
     mock_usage = LLMUsage(input_tokens=1000, output_tokens=500, model="mock", elapsed_sec=1.0)
 
-    with patch("brain.planner.chat_json", return_value=(VALID_PLAN.copy(), mock_usage)):
+    with patch("brain.planner.chat_json", return_value=(VALID_PLAN.copy(), mock_usage)), \
+         patch("brain.planner.analyse_segments", return_value=([{"segment_id": "s1", "role": "explanation", "energy": 2}, {"segment_id": "s2", "role": "claim", "energy": 2}], LLMUsage())), \
+         patch("brain.planner.critic_effect_pass", side_effect=lambda effects, *args: (effects, LLMUsage())):
         plan, usage = generate_plan(
             job_dir=tmp_path,
             transcript=TRANSCRIPT,
@@ -162,12 +164,12 @@ def test_planner_generates_valid_plan(tmp_path):
             source_rel="raw/test.mp4",
         )
 
-    from engine.effects import EFFECT_CATALOG
+    from engine.effects_v4 import EFFECT_CATALOG_V4
     assert plan["segments"][0]["id"] == "s1"
     assert len(plan["captions"]) == 2
     assert len(plan["visual_effects"]) == len(plan["segments"])
     # Smarter scorer may assign any valid catalog effect (not necessarily steady__neutral)
-    assert plan["visual_effects"][0]["type"] in EFFECT_CATALOG
+    assert plan["visual_effects"][0]["type"] in EFFECT_CATALOG_V4
     # V2 planner makes additional LLM calls (segment analysis + effect selection)
     assert usage.input_tokens >= 1000
 
@@ -188,7 +190,9 @@ def test_planner_retries_on_invalid(tmp_path):
             return bad_plan, mock_usage
         return VALID_PLAN.copy(), mock_usage
 
-    with patch("brain.planner.chat_json", side_effect=mock_chat):
+    with patch("brain.planner.chat_json", side_effect=mock_chat), \
+         patch("brain.planner.analyse_segments", return_value=([{"segment_id": "s1", "role": "explanation", "energy": 2}, {"segment_id": "s2", "role": "claim", "energy": 2}], LLMUsage())), \
+         patch("brain.planner.critic_effect_pass", side_effect=lambda effects, *args: (effects, LLMUsage())):
         plan, usage = generate_plan(
             job_dir=tmp_path,
             transcript=TRANSCRIPT,

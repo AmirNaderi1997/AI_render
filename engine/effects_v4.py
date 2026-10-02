@@ -406,6 +406,12 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
     spec = EXTENDED_EFFECTS[effect_id]
     result = ""
     cs = cover_scale
+    # Legacy effects always apply the source-to-portrait cover transform. V4
+    # effects without their own affine need it as well or 16:9 input letterboxes.
+    if cs > 1.001 and effect_id not in {"camera_shake", "freeze_frame_zoom", "zoom_blur_transition"}:
+        result = (f'<filter mlt_service="affine">'
+                  f'<property name="transition.rect">0={_rect(cs, width, height)}</property>'
+                  f'<property name="transition.fill">1</property></filter>')
 
     # Camera shake: use frei0r/Perlin noise if available, else affine-based jitter
     if effect_id == "camera_shake":
@@ -430,19 +436,20 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
         # Use MLT speed filter (complex timing)
         result += """<filter mlt_service="speed"><property name="map">0=0.5;100=1.5</property></filter>"""
 
-    # Blur in: boxblur from high to zero
+    # Blur in: keyframe the supported MLT blur parameter down to its minimum.
     elif effect_id == "blur_in":
         blur_start = spec["params"].get("blur_start", 20)
         result += f"""<filter mlt_service="boxblur">
-            <property name="radius">{blur_start},0</property>
+            <property name="blur">0={blur_start};{min(9, max(frames - 1, 1))}=1</property>
         </filter>"""
 
-    # Vignette pulse: use frei0r.vignette or custom filter
+    # Vignette pulse: animate MLT's native vignette opacity.
     elif effect_id == "vignette_pulse":
-        strength = spec["params"].get("vignette_strength", 0.4)
-        # Simplified: frei0r vignette if available
-        result += f"""<filter mlt_service="frei0r.vignette">
-            <property name="Radius">{strength}</property>
+        strength = min(spec["params"].get("vignette_strength", 0.4), 0.16)
+        result += f"""<filter mlt_service="vignette">
+            <property name="radius">0.78</property>
+            <property name="smooth">0.9</property>
+            <property name="opacity">0=0;{min(8, max(frames - 1, 1))}={strength};{max(frames - 1, 1)}=0.08</property>
         </filter>"""
 
     # RGB split: offset channels (complex, may not render)
