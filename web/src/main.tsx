@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink } from "react-router-do
 import NewReel from "./NewReel";
 import PlanReview from "./PlanReview";
 import Render from "./Render";
+import MyEffects from "./MyEffects";
 
 function App() {
   return (
@@ -12,6 +13,7 @@ function App() {
         <strong>Rafiei AI Editor</strong>
         <NavLink to="/new">New Reel</NavLink>
         <NavLink to="/jobs">Jobs</NavLink>
+        <NavLink to="/my-effects">My Effects</NavLink>
       </nav>
       <main>
         <Routes>
@@ -20,6 +22,7 @@ function App() {
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/jobs/:id" element={<PlanReview />} />
           <Route path="/jobs/:id/render" element={<Render />} />
+          <Route path="/my-effects" element={<MyEffects />} />
         </Routes>
       </main>
     </BrowserRouter>

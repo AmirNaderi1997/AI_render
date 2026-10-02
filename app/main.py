@@ -345,3 +345,62 @@ def open_kdenlive(job_id: str):
     except Exception as e:
         raise HTTPException(500, str(e))
     return {"ok": True, "path": str(mlt)}
+
+
+# ── My Effects: User preferences for effects ───────────────────────────────────
+
+@app.get("/my-effects")
+def get_my_effects():
+    """Get current My Effects preferences (favorites, rules, dislikes, custom assets)."""
+    from engine.effects_v4 import MyEffectsPreset
+    my_effects = MyEffectsPreset()
+    return {
+        "favorites": my_effects.favorites,
+        "rules": my_effects.rules,
+        "dislikes": list(my_effects.dislikes),
+        "custom_assets": my_effects.custom_assets,
+    }
+
+
+class MyEffectsBody(BaseModel):
+    favorites: dict = {}
+    rules: list = []
+    dislikes: list = []
+    custom_assets: dict = {}
+
+
+@app.put("/my-effects")
+def put_my_effects(body: MyEffectsBody):
+    """Save My Effects preferences."""
+    from engine.effects_v4 import MyEffectsPreset
+    my_effects = MyEffectsPreset()
+    my_effects.favorites = body.favorites
+    my_effects.rules = body.rules
+    my_effects.dislikes = set(body.dislikes)
+    my_effects.custom_assets = body.custom_assets
+    my_effects.save()
+    return {"ok": True}
+
+
+@app.get("/jobs/{job_id}/effect-feedback")
+def get_effect_feedback(job_id: str):
+    """Get effect feedback examples (user edits for learning)."""
+    from engine.effects_v4 import EffectFeedback
+    feedback = EffectFeedback()
+    return {"examples": feedback.examples}
+
+
+class EffectFeedbackBody(BaseModel):
+    segment_text: str
+    role: str
+    old_effect: str
+    new_effect: str
+
+
+@app.post("/jobs/{job_id}/effect-feedback")
+def post_effect_feedback(job_id: str, body: EffectFeedbackBody):
+    """Log an effect edit for learning."""
+    from engine.effects_v4 import EffectFeedback
+    feedback = EffectFeedback()
+    feedback.add(body.segment_text, body.role, body.old_effect, body.new_effect)
+    return {"ok": True, "total_examples": len(feedback.examples)}
