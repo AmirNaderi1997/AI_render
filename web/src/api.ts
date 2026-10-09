@@ -228,8 +228,36 @@ async function uploadWithProgress<T>(url: string, body: FormData,
 
 export const api = {
   authenticatedObjectUrl,
-  async downloadAuthenticated(url: string, filename: string, openInNewTab = false): Promise<void> {
-    const objectUrl = await authenticatedObjectUrl(url);
+  async downloadAuthenticated(url: string, filename: string, openInNewTab = false,
+    onProgress?: (percent: number | null) => void): Promise<void> {
+    let objectUrl: string;
+    if (onProgress) {
+      const response = await authFetch(url);
+      if (!response.ok) {
+        const message = await response.text().catch(() => "");
+        throw new Error(`${response.status} ${message || response.statusText}`);
+      }
+      const total = Number(response.headers.get("content-length")) || 0;
+      const reader = response.body?.getReader();
+      if (!reader) {
+        onProgress(null);
+        objectUrl = URL.createObjectURL(await response.blob());
+      } else {
+        const chunks: Uint8Array[] = [];
+        let received = 0;
+        onProgress(total ? 0 : null);
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.byteLength;
+          onProgress(total ? Math.min(100, Math.round(received / total * 100)) : null);
+        }
+        objectUrl = URL.createObjectURL(new Blob(chunks as BlobPart[], { type: response.headers.get("content-type") || "application/octet-stream" }));
+      }
+    } else {
+      objectUrl = await authenticatedObjectUrl(url);
+    }
     if (openInNewTab) {
       const opened = window.open(objectUrl, "_blank", "noopener");
       if (!opened) URL.revokeObjectURL(objectUrl);

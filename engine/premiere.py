@@ -12,6 +12,7 @@ import json
 import hashlib
 import re
 import math
+import subprocess
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ PREMIERE_XML = "project_premiere.xml"
 PREMIERE_CAPTIONS = "premiere_captions.srt"
 PREMIERE_REPORT = "premiere_transition_report.json"
 PREMIERE_BUNDLE = "project_premiere.zip"
+PREMIERE_README = "README.txt"
 PREMIERE_VERIFICATION = "premiere_native_verification.json"
 
 
@@ -320,7 +322,7 @@ def _write_srt(plan: EditPlan, path: Path) -> None:
 
 def _add_file(clip: ET.Element, file_id: str, source: Path, source_frames: int,
               fps: int, width: int, height: int, define: bool,
-              pathurl: str) -> None:
+              pathurl: str, has_source_audio: bool = True) -> None:
     file_node = ET.SubElement(clip, "file", {"id": file_id})
     if not define:
         return
@@ -337,15 +339,19 @@ def _add_file(clip: ET.Element, file_id: str, source: Path, source_frames: int,
     _text(sample, "anamorphic", "FALSE")
     _text(sample, "pixelaspectratio", "square")
     _text(sample, "fielddominance", "none")
-    audio = ET.SubElement(media, "audio")
-    sample = ET.SubElement(audio, "samplecharacteristics")
-    _text(sample, "depth", 16)
-    _text(sample, "samplerate", 48000)
-    _text(audio, "channelcount", 2)
+    if has_source_audio:
+        audio = ET.SubElement(media, "audio")
+        sample = ET.SubElement(audio, "samplecharacteristics")
+        _text(sample, "depth", 16)
+        _text(sample, "samplerate", 48000)
+        _text(audio, "channelcount", 2)
 
 
-def _link_av(clip: ET.Element, segment_id: str, index: int) -> None:
-    for media_type, ref in (("video", f"video-{segment_id}"), ("audio", f"audio-{segment_id}")):
+def _link_av(clip: ET.Element, segment_id: str, index: int, has_source_audio: bool) -> None:
+    pairs = [("video", f"video-{segment_id}")]
+    if has_source_audio:
+        pairs.append(("audio", f"audio-{segment_id}"))
+    for media_type, ref in pairs:
         link = ET.SubElement(clip, "link")
         _text(link, "linkclipref", ref)
         _text(link, "mediatype", media_type)
@@ -356,7 +362,7 @@ def _link_av(clip: ET.Element, segment_id: str, index: int) -> None:
 def _add_clip(track: ET.Element, *, segment, index: int, start: int, end: int,
               previous_overlap: bool, next_overlap: bool, fps: int, source: Path,
               source_frames: int, width: int, height: int, media_type: str,
-              define_file: bool, source_pathurl: str) -> None:
+              define_file: bool, source_pathurl: str, has_source_audio: bool) -> None:
     clip = ET.SubElement(track, "clipitem", {"id": f"{media_type}-{segment.id}"})
     _text(clip, "name", f"{segment.id} · {source.name}")
     _text(clip, "duration", end - start)
@@ -367,8 +373,8 @@ def _add_clip(track: ET.Element, *, segment, index: int, start: int, end: int,
     _text(clip, "in", source_in)
     _text(clip, "out", source_in + (end - start))
     _add_file(clip, "source-1", source, source_frames, fps, width, height,
-              define_file, source_pathurl)
-    _link_av(clip, segment.id, index)
+              define_file, source_pathurl, has_source_audio)
+    _link_av(clip, segment.id, index, has_source_audio)
     if media_type == "audio":
         source_track = ET.SubElement(clip, "sourcetrack")
         _text(source_track, "mediatype", "audio")
@@ -390,7 +396,7 @@ def _add_transition(track: ET.Element, transition, start: int, end: int,
 
 
 def _track(plan: EditPlan, media_parent: ET.Element, media_type: str, source: Path,
-           source_frames: int, source_pathurl: str) -> None:
+           source_frames: int, source_pathurl: str, has_source_audio: bool) -> None:
     container = ET.SubElement(media_parent, media_type)
     if media_type == "video":
         fmt = ET.SubElement(container, "format")
@@ -417,7 +423,7 @@ def _track(plan: EditPlan, media_parent: ET.Element, media_type: str, source: Pa
             fps=plan.canvas.fps, source=source, source_frames=source_frames,
             width=plan.canvas.width, height=plan.canvas.height, media_type=media_type,
             define_file=(media_type == "video" and index == 0),
-            source_pathurl=source_pathurl,
+            source_pathurl=source_pathurl, has_source_audio=has_source_audio,
         )
         if next_frames:
             _add_transition(track, next_, end - next_frames, end, plan.canvas.fps, media_type)
@@ -632,6 +638,7 @@ def _report(plan: EditPlan, source: Path, identity: dict,
             {"filename": PREMIERE_XML, "role": "FCP7 XML interchange sequence"},
             {"filename": PREMIERE_CAPTIONS, "role": "editable caption sidecar"},
             {"filename": PREMIERE_REPORT, "role": "compatibility manifest"},
+            {"filename": PREMIERE_README, "role": "Premiere import instructions"},
             {"filename": PREMIERE_BUNDLE, "role": "all-in-one ZIP package"},
         ],
         "artifact_identity": identity,
@@ -747,39 +754,49 @@ def _music_track(plan: EditPlan, audio_parent: ET.Element, base: Path,
     music_path = _resolve(plan.music.file, base)
     if not music_path.is_file():
         return None
-    fps = plan.canvas.fps
-    output_frames = plan.output_frames
-
-    track = ET.SubElement(audio_parent, "track")
-    # Volume filter with ducking keyframes
-    param = _audio_clipitem(
-        track, fps, clip_id="audio-music", file_id="music-file-1", label=f"Music · {music_path.name}",
-        path=music_path, pathurl=pathurl, start=0, frames=output_frames, file_frames=output_frames)
+    from .probe import probe_duration
+    fps, output_frames = plan.canvas.fps, plan.output_frames
+    try:
+        file_frames = max(1, round(probe_duration(music_path) * fps))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        file_frames = output_frames  # Older placeholder-media unit fixtures.
 
     base_db = plan.music.volume_db
-    if plan.music.duck:
-        ramp_sec = 0.3
-        ramp_frames = max(1, round(ramp_sec * fps))
-        _text(param, "value", base_db)
-        for duck in plan.music.duck:
-            duck_start = round(duck.start * fps)
-            duck_end = round(duck.end * fps)
-            # Ramp down
-            kf_down_start = ET.SubElement(param, "keyframe")
-            _text(kf_down_start, "when", max(0, duck_start - ramp_frames))
-            _text(kf_down_start, "value", base_db)
-            kf_down_end = ET.SubElement(param, "keyframe")
-            _text(kf_down_end, "when", duck_start)
-            _text(kf_down_end, "value", duck.volume_db)
-            # Ramp up
-            kf_up_start = ET.SubElement(param, "keyframe")
-            _text(kf_up_start, "when", duck_end)
-            _text(kf_up_start, "value", duck.volume_db)
-            kf_up_end = ET.SubElement(param, "keyframe")
-            _text(kf_up_end, "when", min(output_frames, duck_end + ramp_frames))
-            _text(kf_up_end, "value", base_db)
-    else:
-        _text(param, "value", base_db)
+    ramp_frames = max(1, round(0.3 * fps))
+    points = [(0, base_db), (output_frames, base_db)]
+    for duck in plan.music.duck:
+        start, end = round(duck.start * fps), round(duck.end * fps)
+        points.extend([(max(0, start - ramp_frames), base_db),
+                       (start, duck.volume_db), (end, duck.volume_db),
+                       (min(output_frames, end + ramp_frames), base_db)])
+    points = sorted(dict(points).items())
+
+    def level_at(frame: int) -> float:
+        for left, right in zip(points, points[1:]):
+            if left[0] <= frame <= right[0]:
+                if left[0] == right[0]:
+                    return float(right[1])
+                ratio = (frame - left[0]) / (right[0] - left[0])
+                return float(left[1]) + ratio * (float(right[1]) - float(left[1]))
+        return float(points[-1][1])
+
+    track = ET.SubElement(audio_parent, "track")
+    position, index = 0, 0
+    while position < output_frames:
+        frames = min(file_frames, output_frames - position)
+        param = _audio_clipitem(
+            track, fps, clip_id="audio-music" if index == 0 else f"audio-music-{index}",
+            file_id="music-file-1", label=f"Music · {music_path.name}",
+            path=music_path, pathurl=pathurl, start=position, frames=frames,
+            file_frames=file_frames, define_file=index == 0)
+        _text(param, "value", level_at(position))
+        if plan.music.duck:
+            frames_to_write = {position, position + frames}
+            frames_to_write.update(t for t, _ in points if position < t < position + frames)
+            for frame in sorted(frames_to_write):
+                _keyframe(param, frame - position, round(level_at(frame), 3))
+        position += frames
+        index += 1
 
     _text(track, "enabled", "TRUE")
     _text(track, "locked", "FALSE")
@@ -894,6 +911,39 @@ def _sfx_tracks(plan: EditPlan, audio_parent: ET.Element, base: Path,
     return paths
 
 
+def _broll_tracks(plan: EditPlan, video_parent: ET.Element, base: Path,
+                  pathurls: dict[Path, str]) -> list[Path]:
+    """Place B-roll on video tracks at its output-timeline position."""
+    paths = []
+    fps = plan.canvas.fps
+    for index, item in enumerate(plan.broll):
+        path = _resolve(item.file, base)
+        if not path.is_file():
+            raise FileNotFoundError(f"Premiere B-roll media is missing: {path}")
+        start = round(item.at * fps)
+        frames = round(item.duration * fps)
+        source_in = round(item.in_ * fps)
+        if frames <= 0 or start + frames > plan.output_frames:
+            raise ValueError(f"Premiere B-roll timing is outside the sequence: {index}")
+        track = ET.SubElement(video_parent, "track")
+        clip = ET.SubElement(track, "clipitem", {"id": f"video-broll-{index}"})
+        _text(clip, "name", f"B-roll · {path.name}")
+        _text(clip, "duration", frames)
+        _rate(clip, fps)
+        for tag, value in (("start", start), ("end", start + frames),
+                           ("in", source_in), ("out", source_in + frames)):
+            _text(clip, tag, value)
+        file_node = ET.SubElement(clip, "file", {"id": f"broll-file-{index}"})
+        _text(file_node, "name", path.name)
+        _text(file_node, "pathurl", pathurls[path.resolve()])
+        _rate(file_node, fps)
+        _text(file_node, "duration", source_in + frames)
+        _text(track, "enabled", "TRUE")
+        _text(track, "locked", "FALSE")
+        paths.append(path)
+    return paths
+
+
 def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
                    attached_music: AttachedMusic | None = None) -> Path:
     """Write XML, SRT, report and zip bundle; return the bundle path.
@@ -904,10 +954,18 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
     out_dir.mkdir(parents=True, exist_ok=True)
     base = Path(base_dir) if base_dir else out_dir
     source = _resolve(plan.source, base)
+    from .probe import has_audio
+    try:
+        source_has_audio = has_audio(source)
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        # Old hand-authored plans and unit fixtures can use placeholder bytes.
+        # The API validates real media before export.
+        source_has_audio = True
     source_frames = max(round(max(segment.out for segment in plan.segments) * plan.canvas.fps), 1)
 
     bundled_media: dict[Path, str] = {}
     media_paths = [source]
+    media_paths.extend(_resolve(item.file, base) for item in plan.broll)
     if plan.music:
         media_paths.append(_resolve(plan.music.file, base))
     media_paths.extend(_resolve(item.file, base) for item in plan.sfx)
@@ -915,9 +973,10 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
         media_paths.append(Path(attached_music.file))
     for path in media_paths:
         resolved = path.resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError(f"Premiere media is missing: {resolved}")
         if resolved not in bundled_media:
-            digest = (_sha256(resolved)[:12] if resolved.is_file()
-                      else hashlib.sha256(str(resolved).encode()).hexdigest()[:12])
+            digest = _sha256(resolved)[:12]
             bundled_media[resolved] = PurePosixPath("media", f"{digest}-{resolved.name}").as_posix()
 
     root = ET.Element("xmeml", {"version": "5"})
@@ -929,8 +988,12 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
     _text(sequence, "out", plan.output_frames)
     media = ET.SubElement(sequence, "media")
     source_pathurl = bundled_media[source.resolve()]
-    _track(plan, media, "video", source, source_frames, source_pathurl)
-    _track(plan, media, "audio", source, source_frames, source_pathurl)
+    _track(plan, media, "video", source, source_frames, source_pathurl, source_has_audio)
+    if source_has_audio:
+        _track(plan, media, "audio", source, source_frames, source_pathurl, source_has_audio)
+    else:
+        ET.SubElement(media, "audio")
+    broll_paths = _broll_tracks(plan, media.find("video"), base, bundled_media)
 
     # Find the <audio> element that _track just created for the main audio
     audio_container = media.find("audio")
@@ -961,21 +1024,32 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
     validate_manifest(report)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Include cleaned audio if denoise is enabled
+    # Include cleaned audio if denoise is enabled.
     denoise_audio_path = None
     if plan.denoise and plan.denoise.get("enabled") and plan.denoise.get("audio_file"):
         candidate = _resolve(plan.denoise["audio_file"], base)
-        if candidate.is_file():
-            denoise_audio_path = candidate
+        if not candidate.is_file():
+            raise FileNotFoundError(f"Premiere cleaned narration is missing: {candidate}")
+        denoise_audio_path = candidate
+
+    readme = (
+        "AI Render Premiere Pro export\n\n"
+        "1. Unzip this archive, keeping the media folder beside project_premiere.xml.\n"
+        "2. In Premiere Pro, create a new project and choose File > Import, then select project_premiere.xml.\n"
+        "3. Import premiere_captions.srt and place it on a Caption track.\n"
+        "4. Inspect the editable sequence, audio tracks, and media links, then save the project as a .prproj file.\n\n"
+        "AI Render supplies FCP7 XML interchange, not a native .prproj file. "
+        "See premiere_transition_report.json for mappings and limitations.\n"
+    )
 
     bundle = out_dir / PREMIERE_BUNDLE
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in (xml_path, srt_path, report_path):
             archive.write(path, arcname=path.name)
+        archive.writestr(PREMIERE_README, readme)
         for path in dict.fromkeys([source, *([music_path] if music_path else []),
-                                   *([attached_path] if attached_path else []), *sfx_paths]):
-            if path.is_file():
-                archive.write(path, arcname=bundled_media[path.resolve()])
+                                   *([attached_path] if attached_path else []), *sfx_paths, *broll_paths]):
+            archive.write(path, arcname=bundled_media[path.resolve()])
         if denoise_audio_path:
             archive.write(denoise_audio_path, arcname=denoise_audio_path.name)
     return bundle

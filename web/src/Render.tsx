@@ -528,7 +528,7 @@ export default function Render() {
         }}
       />
 
-      <PremiereCard key={`${id}:${s.status}:${s.output || ""}`} id={id} />
+      <PremiereCard key={`${id}:${s.status}:${s.output || ""}`} id={id} renderDone={finished} />
     </div>
   );
 }

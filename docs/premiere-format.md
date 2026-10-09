@@ -5,8 +5,10 @@ Premiere import. It does **not** create or reverse-engineer Adobe's private
 `.prproj` format. Import `project_premiere.xml` in Premiere, relink media if it
 has moved, then save the imported project from Premiere as `.prproj`.
 
-The ZIP contains the XML, UTF-8 `premiere_captions.srt`, and
-`premiere_transition_report.json`. The report filename remains for compatibility;
+The ZIP contains the XML, UTF-8 `premiere_captions.srt`, `README.txt`,
+`premiere_transition_report.json`, and the referenced source, B-roll, music,
+and narration/SFX media under `media/`. XML media paths are relative to the ZIP
+root; extract the entire archive before importing the XML. The report filename remains for compatibility;
 the file is now the complete package compatibility manifest. Plan Review also
 offers separate XML, SRT, ZIP, and manifest downloads.
 

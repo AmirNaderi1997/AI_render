@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import wave
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -11,6 +13,7 @@ from engine.premiere import (
     PREMIERE_BUNDLE,
     PREMIERE_CAPTIONS,
     PREMIERE_REPORT,
+    PREMIERE_README,
     PREMIERE_VERIFICATION,
     PREMIERE_XML,
     build_premiere,
@@ -18,7 +21,7 @@ from engine.premiere import (
     write_native_verification_record,
     _text,
 )
-from engine.schema import validate_plan
+from engine.schema import Broll, Music, Sfx, validate_plan
 
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples" / "plans"
@@ -96,7 +99,9 @@ def test_premiere_hard_cut_is_backward_compatible(tmp_path, media_dir):
     assert root.findall("./sequence/media/video/track/transitionitem") == []
     clips = root.findall("./sequence/media/video/track/clipitem")
     assert [(c.findtext("start"), c.findtext("end")) for c in clips] == [("0", "60"), ("60", "150")]
-    assert clips[0].findtext("file/pathurl") == (tmp_path / "raw.mp4").resolve().as_uri()
+    assert clips[0].findtext("file/pathurl").startswith("media/")
+    with zipfile.ZipFile(bundle) as archive:
+        assert clips[0].findtext("file/pathurl") in archive.namelist()
     assert bundle.name == PREMIERE_BUNDLE and bundle.exists()
 
 
@@ -143,8 +148,65 @@ def test_premiere_directional_mapping_uses_explicit_verified_fallback(tmp_path, 
     assert report["warnings"]
 
     with zipfile.ZipFile(bundle) as archive:
-        assert set(archive.namelist()) == {PREMIERE_XML, PREMIERE_CAPTIONS, PREMIERE_REPORT}
+        assert {PREMIERE_XML, PREMIERE_CAPTIONS, PREMIERE_REPORT, PREMIERE_README}.issubset(archive.namelist())
+        assert all(path in archive.namelist() for path in
+                   ET.fromstring(archive.read(PREMIERE_XML).split(b"<!DOCTYPE xmeml>\n", 1)[1])
+                   .itertext() if path.startswith("media/"))
+        assert b"File > Import" in archive.read(PREMIERE_README)
         assert "سلام" in archive.read(PREMIERE_CAPTIONS).decode("utf-8")
+
+
+def test_package_contains_timed_broll_music_and_narration(tmp_path, media_dir):
+    plan = _plan(tmp_path, media_dir)
+    audio = tmp_path / "narration.wav"
+    with wave.open(str(audio), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(48000)
+        output.writeframes(b"\0\0" * 48000)
+    plan.broll = [Broll(at=1, duration=1, in_=0.5, file="raw.mp4")]
+    plan.music = Music(file="narration.wav", volume_db=-18)
+    plan.sfx = [Sfx(at=2, file="narration.wav", volume_db=-3)]
+    bundle = build_premiere(plan, tmp_path, base_dir=tmp_path)
+    with zipfile.ZipFile(bundle) as archive:
+        root = ET.fromstring(archive.read(PREMIERE_XML).split(b"<!DOCTYPE xmeml>\n", 1)[1])
+        names = set(archive.namelist())
+        for path in root.findall(".//file/pathurl"):
+            assert path.text and path.text.startswith("media/") and path.text in names
+        broll = root.find("./sequence/media/video/track/clipitem[@id='video-broll-0']")
+        assert broll is not None
+        assert [broll.findtext(tag) for tag in ("start", "end", "in", "out")] == ["30", "60", "15", "45"]
+        narration = root.find("./sequence/media/audio/track/clipitem[@id='audio-sfx-0']")
+        assert narration is not None
+        assert [narration.findtext(tag) for tag in ("start", "end", "in", "out")] == ["60", "90", "0", "30"]
+        music = root.find("./sequence/media/audio/track/clipitem[@id='audio-music']")
+        assert music is not None
+        music_track = next(track for track in root.findall("./sequence/media/audio/track")
+                           if track.find("clipitem[@id='audio-music']") is not None)
+        music_clips = music_track.findall("clipitem")
+        assert len(music_clips) == 5
+        assert [(clip.findtext("start"), clip.findtext("end")) for clip in music_clips] == [
+            (str(start), str(start + 30)) for start in range(0, 150, 30)]
+
+
+def test_package_refuses_missing_media(tmp_path, media_dir):
+    plan = _plan(tmp_path, media_dir)
+    plan.sfx = [Sfx(at=1, file="missing.wav")]
+    with pytest.raises(FileNotFoundError, match="Premiere media is missing"):
+        build_premiere(plan, tmp_path, base_dir=tmp_path)
+
+
+def test_silent_source_does_not_claim_an_audio_stream(tmp_path, media_dir):
+    plan = _plan(tmp_path, media_dir)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                    "color=c=black:s=1080x1920:r=30:d=5", "-an", "-c:v", "libx264",
+                    str(tmp_path / "silent.mp4")], check=True)
+    plan.source = "silent.mp4"
+    build_premiere(plan, tmp_path, base_dir=tmp_path)
+    root = _xml(tmp_path / PREMIERE_XML)
+    assert root.findall("./sequence/media/audio/track") == []
+    assert root.find("./sequence/media/video/track/clipitem/file/media/audio") is None
+    assert root.find("./sequence/media/video/track/clipitem/link/mediatype").text == "video"
 
 
 def test_premiere_zoom_candidate_is_marked_unverified_until_native_acceptance(tmp_path, media_dir):

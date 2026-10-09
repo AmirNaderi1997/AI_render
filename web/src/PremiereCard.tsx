@@ -2,13 +2,16 @@ import React from "react";
 import { api, PremiereMode, PremiereStatus } from "./api";
 import { friendlyError } from "./ui";
 
-export function PremiereCard({ id, savePlan }: { id: string; savePlan?: () => Promise<boolean> }) {
+export function PremiereCard({ id, savePlan, renderDone = false }: { id: string; savePlan?: () => Promise<boolean>; renderDone?: boolean }) {
   const [state, setState] = React.useState<PremiereStatus | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const [statusError, setStatusError] = React.useState("");
   const [pairingCode, setPairingCode] = React.useState("");
   const [steps, setSteps] = React.useState<string[] | null>(null);
+  const [downloadProgress, setDownloadProgress] = React.useState<number | null>(null);
+  const [downloading, setDownloading] = React.useState(false);
+  const [downloaded, setDownloaded] = React.useState(false);
   const polling = React.useRef(false);
   const refresh = React.useCallback(async () => {
     if (polling.current) return;
@@ -80,9 +83,14 @@ export function PremiereCard({ id, savePlan }: { id: string; savePlan?: () => Pr
 
   async function transfer(url: string, filename: string, open = false) {
     setBusy(true); setMessage("");
-    try { await api.downloadAuthenticated(url, filename, open); }
+    if (filename.endsWith(".zip")) { setDownloaded(false); setDownloadProgress(null); setDownloading(true); }
+    try {
+      await api.downloadAuthenticated(url, filename, open,
+        filename.endsWith(".zip") ? setDownloadProgress : undefined);
+      if (filename.endsWith(".zip")) setDownloaded(true);
+    }
     catch (e) { setMessage(friendlyError(e, "download this Premiere file")); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setDownloading(false); }
   }
 
   const local = !!state?.capability.local_launch_supported;
@@ -135,8 +143,14 @@ export function PremiereCard({ id, savePlan }: { id: string; savePlan?: () => Pr
     {message && <p role="status" dir="auto">{message}</p>}
     {statusError && <p role="alert" className="errors">{statusError} <button className="secondary" onClick={() => void refresh()}>Try again</button></p>}
     <p className="muted">The bridge controls and verifies Premiere from inside the app. The other Open/Reveal buttons are macOS file handoffs only and never claim Timeline or caption success.</p>
+    {renderDone && <div className="premiere-export">
+      <p>Includes: Video + Audio + Narration + Music + Captions (when present in this job).</p>
+      <button disabled={busy} onClick={() => void transfer(api.premiereUrl(id), `ai-render-${id}-premiere.zip`)}>Export to Premiere Pro · Download ZIP</button>
+      {downloading && <progress aria-label="Premiere ZIP download progress" value={downloadProgress ?? undefined} max={100} />}
+      {downloading && <span role="status">{downloadProgress === null ? "Downloading…" : `Downloading ${downloadProgress}%`}</span>}
+      {downloaded && <p role="status">Download started. Unzip → In Premiere Pro, create a project and import project_premiere.xml (File → Import). Then import premiere_captions.srt and save the project as .prproj.</p>}
+    </div>}
     <div className="premiere-actions">
-      <button disabled={busy} onClick={() => void transfer(api.premiereUrl(id), `ai-render-${id}-premiere.zip`)}>Download ZIP</button>
       <button disabled={busy} onClick={() => void transfer(api.premiereXmlUrl(id), "project_premiere.xml")}>Download XML</button>
       <button disabled={busy} onClick={() => void transfer(api.premiereCaptionsUrl(id), "premiere_captions.srt")}>Download SRT</button>
       <button disabled={busy} onClick={() => void transfer(api.premiereReportUrl(id), "premiere_transition_report.json", true)}>Compatibility report</button>
