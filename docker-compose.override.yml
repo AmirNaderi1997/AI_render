@@ -1,0 +1,6 @@
+# Allow the macOS development backend to use the existing Docker database.
+# Port 5432 belongs to the separate PostgreSQL installation on this Mac.
+services:
+  db:
+    ports:
+      - "127.0.0.1:55432:5432"

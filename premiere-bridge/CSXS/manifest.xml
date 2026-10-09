@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0" ExtensionBundleId="ir.airender.premiere.bridge"
+  ExtensionBundleVersion="0.1.1" ExtensionBundleName="AI Render Premiere Bridge"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ExtensionList>
+    <Extension Id="ir.airender.premiere.bridge.panel" Version="0.1.1" />
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList><Host Name="PPRO" Version="[25.0,25.6)" /></HostList>
+    <LocaleList><Locale Code="All" /></LocaleList>
+    <RequiredRuntimeList><RequiredRuntime Name="CSXS" Version="11.0" /></RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="ir.airender.premiere.bridge.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/bridge.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--allow-file-access</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle><AutoVisible>true</AutoVisible></Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>AI Render Bridge</Menu>
+          <Geometry>
+            <Size><Height>360</Height><Width>420</Width></Size>
+            <MinSize><Height>300</Height><Width>340</Width></MinSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

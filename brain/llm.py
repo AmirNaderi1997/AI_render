@@ -1,7 +1,7 @@
 """Provider-agnostic LLM client.
 
 Chosen by env vars:
-  LLM_PROVIDER   (anthropic|openai|openai_compatible|jarvis)  – default: anthropic
+  LLM_PROVIDER   (anthropic|openai|openai_compatible|jarvis|sarovi) – default: anthropic
   LLM_MODEL      – text/plan model                            – default: claude-sonnet-5-5
   VISION_PROVIDER (anthropic|openai|openai_compatible|jarvis) – default: same as LLM_PROVIDER
   VISION_MODEL   – image-capable model (content gen/editing/hints) – default: gpt-5-5-image
@@ -18,22 +18,44 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.config import settings
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_PROVIDER_TIMEOUT_SECONDS = 300.0
+_MAX_PROVIDER_TIMEOUT_SECONDS = 600.0
+
+
+def _provider_timeout_seconds(override: float | None = None) -> float:
+    """Bound hosted model calls so a background job cannot wait indefinitely."""
+    try:
+        configured_timeout = float(settings.AI_PROVIDER_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        configured_timeout = _DEFAULT_PROVIDER_TIMEOUT_SECONDS
+    if not math.isfinite(configured_timeout) or configured_timeout <= 0:
+        configured_timeout = _DEFAULT_PROVIDER_TIMEOUT_SECONDS
+    fallback = min(configured_timeout, _MAX_PROVIDER_TIMEOUT_SECONDS)
+    if override is None:
+        return fallback
+    try:
+        timeout = float(override)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(timeout) or timeout <= 0:
+        return fallback
+    return min(timeout, _MAX_PROVIDER_TIMEOUT_SECONDS)
 
 # Pricing per 1M tokens (input, output) — approximate
 _PRICING: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-sonnet-5": (2.00, 10.00),
+    "anthropic/claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5-5": (4.00, 20.00),
     "claude-haiku-4-5": (1.00, 5.00),
     "gpt-4o": (2.50, 10.00),
@@ -60,30 +82,24 @@ class LLMUsage:
 
 def _getenv_ci(name: str) -> str | None:
     """Case-insensitive env var lookup."""
-    val = os.getenv(name)
-    if val:
-        return val
-    lower = name.lower()
-    for k, v in os.environ.items():
-        if k.lower() == lower:
-            return v
-    return None
+    value = getattr(settings, name, None)
+    return value if isinstance(value, str) and value else None
 
 
 def _provider() -> str:
-    return os.getenv("LLM_PROVIDER", "anthropic").lower()
+    return settings.LLM_PROVIDER.lower()
 
 
 def _model() -> str:
-    return os.getenv("LLM_MODEL", "claude-sonnet-5-5")
+    return settings.LLM_MODEL
 
 
 def _vision_provider() -> str:
-    return os.getenv("VISION_PROVIDER", _provider()).lower()
+    return (settings.VISION_PROVIDER or _provider()).lower()
 
 
 def _vision_model() -> str:
-    return os.getenv("VISION_MODEL", "gpt-5-5-image")
+    return settings.VISION_MODEL
 
 
 _PRESETS: dict[str, tuple[str, str]] = {
@@ -100,6 +116,7 @@ def chat_json(
     model: Optional[str] = None,
     max_tokens: int = 16000,
     temperature: float = 0.0,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[dict, LLMUsage]:
     """Send a single-turn request expecting a JSON response.
 
@@ -111,15 +128,49 @@ def chat_json(
     t0 = time.monotonic()
 
     if provider == "anthropic":
-        return _anthropic_call(system, user, model, max_tokens)
+        return _anthropic_call(system, user, model, max_tokens, timeout_seconds)
     elif provider == "openai":
-        return _openai_call(system, user, model, max_tokens, temperature)
+        return _openai_call(system, user, model, max_tokens, temperature, timeout_seconds)
+    elif provider == "sarovi":
+        return _sarovi_call(system, user, model, max_tokens, timeout_seconds)
     elif provider in ("openai_compatible", "jarvis"):
         return _openai_compatible_call(
             system, user, model, max_tokens, temperature, preset=provider,
+            timeout_seconds=timeout_seconds,
         )
     else:
         raise ValueError(f"unsupported LLM_PROVIDER={provider!r}")
+
+
+def _sarovi_call(
+    system: str, user: str, model: str, max_tokens: int,
+    timeout_seconds: Optional[float] = None,
+) -> tuple[dict, LLMUsage]:
+    from .sarovi import request
+
+    if len(system) > 12000:
+        raise ValueError("Sarovi instructions exceed its 12000-character limit")
+    if len(user) > 96000:
+        raise ValueError("Sarovi input exceeds its 96000-character limit")
+    t0 = time.monotonic()
+    result = request("/responses", {
+        "model": model,
+        "instructions": system,
+        "input": user,
+        "max_output_tokens": max(128, min(max_tokens, 32768)),
+    }, timeout=_provider_timeout_seconds(timeout_seconds))
+    text = result.get("output_text", "")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError("Sarovi returned no text")
+    reported = result.get("usage") or {}
+    usage = LLMUsage(
+        input_tokens=reported.get("input_tokens", 0),
+        output_tokens=reported.get("output_tokens", 0),
+        model=result.get("model", model),
+        elapsed_sec=round(time.monotonic() - t0, 2),
+    )
+    _log_usage(usage, provider="sarovi", call_type="text")
+    return _extract_json(text), usage
 
 
 # ── vision / content-analysis model ──────────────────────────────────────────
@@ -133,6 +184,7 @@ def chat_vision(
     max_tokens: int = 4096,
     temperature: float = 0.3,
     return_json: bool = False,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[str | dict, LLMUsage]:
     """Image-capable call for content generation, editing, and engagement hints.
 
@@ -147,10 +199,11 @@ def chat_vision(
     images = images or []
 
     if provider == "anthropic":
-        result = _anthropic_vision_call(system, user, images, model, max_tokens)
+        result = _anthropic_vision_call(system, user, images, model, max_tokens, timeout_seconds=timeout_seconds)
     elif provider in ("openai", "openai_compatible", "jarvis"):
         result = _openai_vision_call(
             system, user, images, model, max_tokens, temperature, preset=provider,
+            timeout_seconds=timeout_seconds,
         )
     else:
         raise ValueError(f"unsupported VISION_PROVIDER={provider!r}")
@@ -165,10 +218,11 @@ def chat_vision(
 
 def _anthropic_call(
     system: str, user: str, model: str, max_tokens: int,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[dict, LLMUsage]:
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(timeout=_provider_timeout_seconds(timeout_seconds))
     t0 = time.monotonic()
     response = client.messages.create(
         model=model,
@@ -194,10 +248,11 @@ def _anthropic_vision_call(
     images: list,
     model: str,
     max_tokens: int,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[str, LLMUsage]:
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(timeout=_provider_timeout_seconds(timeout_seconds))
     t0 = time.monotonic()
 
     content: list[dict] = []
@@ -227,10 +282,13 @@ def _anthropic_vision_call(
 
 def _openai_call(
     system: str, user: str, model: str, max_tokens: int, temperature: float,
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[dict, LLMUsage]:
     from openai import OpenAI
 
-    client = OpenAI()
+    api_key, base_url = _resolve_preset("openai")
+    client = OpenAI(api_key=api_key, base_url=base_url or None,
+                    timeout=_provider_timeout_seconds(timeout_seconds), max_retries=0)
     t0 = time.monotonic()
     response = client.chat.completions.create(
         model=model,
@@ -243,6 +301,8 @@ def _openai_call(
         ],
     )
 
+    if not response.choices:
+        raise RuntimeError("OpenAI returned no completion choices")
     text = response.choices[0].message.content or ""
     usage = LLMUsage(
         input_tokens=response.usage.prompt_tokens if response.usage else 0,
@@ -261,11 +321,13 @@ def _openai_compatible_call(
     max_tokens: int,
     temperature: float,
     preset: str = "openai_compatible",
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[dict, LLMUsage]:
     from openai import OpenAI
 
     api_key, base_url = _resolve_preset(preset)
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(api_key=api_key, base_url=base_url,
+                    timeout=_provider_timeout_seconds(timeout_seconds), max_retries=0)
     t0 = time.monotonic()
     response = client.chat.completions.create(
         model=model,
@@ -277,6 +339,8 @@ def _openai_compatible_call(
         ],
     )
 
+    if not response.choices:
+        raise RuntimeError(f"{preset} returned no completion choices")
     text = response.choices[0].message.content or ""
     usage = LLMUsage(
         input_tokens=response.usage.prompt_tokens if response.usage else 0,
@@ -297,14 +361,18 @@ def _openai_vision_call(
     max_tokens: int,
     temperature: float,
     preset: str = "openai",
+    timeout_seconds: Optional[float] = None,
 ) -> tuple[str, LLMUsage]:
     from openai import OpenAI
 
     if preset in ("openai_compatible", "jarvis"):
         api_key, base_url = _resolve_preset(preset)
-        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url,
+                        timeout=_provider_timeout_seconds(timeout_seconds), max_retries=0)
     else:
-        client = OpenAI()
+        api_key, base_url = _resolve_preset("openai")
+        client = OpenAI(api_key=api_key, base_url=base_url or None,
+                        timeout=_provider_timeout_seconds(timeout_seconds), max_retries=0)
 
     t0 = time.monotonic()
     content: list[dict] = []
@@ -329,6 +397,8 @@ def _openai_vision_call(
         ],
     )
 
+    if not response.choices:
+        raise RuntimeError(f"{preset} returned no completion choices")
     text = response.choices[0].message.content or ""
     usage = LLMUsage(
         input_tokens=response.usage.prompt_tokens if response.usage else 0,
@@ -349,14 +419,15 @@ def _openai_vision_call(
 def _resolve_preset(preset: str) -> tuple[str, str]:
     if preset in _PRESETS:
         key_env, url_env = _PRESETS[preset]
+        api_key = _getenv_ci(key_env)
+        base_url = _getenv_ci(url_env)
     else:
-        key_env, url_env = "LLM_API_KEY", "LLM_BASE_URL"
-
-    api_key = _getenv_ci(key_env)
-    base_url = _getenv_ci(url_env)
+        api_key = _getenv_ci("LLM_API_KEY") or _getenv_ci("OPENAI_API_KEY")
+        base_url = _getenv_ci("LLM_BASE_URL") or _getenv_ci("OPENAI_BASE_URL")
+        key_env, url_env = "LLM_API_KEY or OPENAI_API_KEY", "LLM_BASE_URL or OPENAI_BASE_URL"
     if not api_key:
         raise ValueError(f"{key_env} not set")
-    if not base_url:
+    if not base_url and preset != "openai":
         raise ValueError(f"{url_env} not set")
     return api_key, base_url
 

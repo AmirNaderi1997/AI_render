@@ -1,0 +1,333 @@
+<title>AI Render → Premiere</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --bg:      #141416;
+  --surface: #1c1c20;
+  --card:    #242428;
+  --border:  #35353c;
+  --fg:      #e8e8ee;
+  --muted:   #7a7a8e;
+  --accent:  #4b78ff;
+  --accent2: #7c57ff;
+  --ok:      #36c27a;
+  --warn:    #f5a623;
+  --mono:    'IBM Plex Mono', monospace;
+  --sans:    'Inter', system-ui, sans-serif;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f2f2f5; --surface: #ffffff; --card: #f8f8fb;
+    --border: #dcdce8; --fg: #18181e; --muted: #70708a;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f2f2f5; --surface: #ffffff; --card: #f8f8fb;
+  --border: #dcdce8; --fg: #18181e; --muted: #70708a;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  padding-block: 32px;
+  padding-inline: 20px;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.header { margin-bottom: 40px; }
+.header h1 {
+  font-size: clamp(22px, 4vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  text-wrap: balance;
+  display: flex; align-items: center; gap: 10px;
+}
+.pill {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 3px 9px; border-radius: 99px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.header p { color: var(--muted); margin-top: 8px; font-size: 14px; }
+
+.prereqs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 36px;
+}
+.prereq {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; font-weight: 500;
+}
+.prereq .icon { font-size: 18px; flex-shrink: 0; }
+.prereq small { display: block; font-size: 11px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+
+.steps { display: flex; flex-direction: column; }
+.step {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 0 16px;
+  position: relative;
+}
+.step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 23px; top: 48px; bottom: 0;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--border), transparent);
+}
+.step-num {
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff;
+  font-weight: 700; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; z-index: 1;
+}
+.step-body { padding-bottom: 36px; min-width: 0; }
+.step-body h2 {
+  font-size: 16px; font-weight: 700;
+  margin-top: 12px; margin-bottom: 6px;
+  text-wrap: balance;
+}
+.step-body p { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+
+.mockup {
+  background: #18181c;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.mockup-bar {
+  background: #111114;
+  padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+.dots { display: flex; gap: 5px; }
+.dots span { width: 10px; height: 10px; border-radius: 50%; }
+.dots .r { background: #ff5f57; }
+.dots .y { background: #febc2e; }
+.dots .g { background: #28c840; }
+.mockup-body { padding: 14px; }
+
+.status-row {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.status-row .label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+.status-row .value { font-weight: 600; margin-top: 2px; font-size: 12px; }
+.value.ok { color: var(--ok); }
+
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff; border: none; border-radius: 6px;
+  padding: 8px 14px; font: 600 12px var(--sans); cursor: pointer; white-space: nowrap;
+}
+.btn-ghost {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 14px; font: 500 12px var(--sans); cursor: pointer; white-space: nowrap;
+}
+
+.panel-hdr {
+  font-size: 13px; font-weight: 700;
+  margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.dot-sm { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.blue  { background: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
+.green { background: var(--ok); }
+.grey  { background: var(--border); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+
+.p-status {
+  border-radius: 7px; padding: 10px 12px;
+  font-size: 12px; line-height: 1.5; margin-bottom: 10px;
+}
+.watching { background: color-mix(in srgb, var(--accent) 10%, transparent); border-left: 3px solid var(--accent); color: #a0b4ff; }
+.working  { background: color-mix(in srgb, var(--warn) 10%, transparent); border-left: 3px solid var(--warn); color: #f5c87a; }
+.success  { background: color-mix(in srgb, var(--ok) 10%, transparent); border-left: 3px solid var(--ok); color: #7de0a8; }
+
+.job-card {
+  background: #1a2540; border: 1px solid #2d4080;
+  border-radius: 7px; padding: 10px 12px; margin-bottom: 10px;
+}
+.job-card .jname { font-weight: 700; font-size: 12px; margin-bottom: 3px; }
+.job-card .jmeta { font-size: 10px; color: #7a99cc; }
+
+.apply-btn {
+  width: 100%; background: var(--accent); color: #fff;
+  border: none; border-radius: 6px; padding: 9px 12px;
+  font: 700 12px var(--sans); cursor: pointer;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.badge {
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 99px;
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  color: var(--ok);
+}
+
+code {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px; color: #a0b4ff;
+}
+
+.note {
+  margin-top: 32px; padding: 14px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; font-size: 12px; color: var(--muted);
+}
+.note strong { color: var(--fg); }
+.note p + p { margin-top: 8px; }
+</style>
+
+<div class="header">
+  <h1><span class="pill">How To</span> AI Render → Premiere</h1>
+  <p>After rendering, the Bridge panel picks up your job automatically — no pairing code to type.</p>
+</div>
+
+<div class="prereqs">
+  <div class="prereq">
+    <span class="icon">⚙️</span>
+    <div>
+      <strong>Backend running</strong>
+      <small><code>uvicorn app.main:app --port 8000</code></small>
+    </div>
+  </div>
+  <div class="prereq">
+    <span class="icon">🌐</span>
+    <div>
+      <strong>Web UI open</strong>
+      <small>localhost:5173</small>
+    </div>
+  </div>
+  <div class="prereq">
+    <span class="icon">🎬</span>
+    <div>
+      <strong>Bridge panel open</strong>
+      <small>Window → Extensions → AI Render Bridge</small>
+    </div>
+  </div>
+</div>
+
+<div class="steps">
+
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h2>Open a completed job's Render page</h2>
+      <p>Go to Jobs, click a DONE job, then scroll to the <strong>Premiere Pro</strong> section.</p>
+      <div class="mockup">
+        <div class="mockup-bar">
+          <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <span>localhost:5173 · Job → Render</span>
+        </div>
+        <div class="mockup-body">
+          <div class="status-row">
+            <div class="label">Premiere Pro · 25.3.0</div>
+            <div class="value ok">XML ready · Render ready · Bridge: not connected</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn-primary">Connect inside Premiere</button>
+            <button class="btn-ghost">Open editable plan in Premiere</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h2>Click "Connect inside Premiere"</h2>
+      <p>This registers a pending bridge session on the backend. The panel will pick it up on its next poll (within 3 seconds).</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h2>Panel shows the job — click Apply</h2>
+      <p>The AI Render Bridge panel inside Premiere detects the pending job automatically and shows a one-click Apply button.</p>
+      <div class="mockup">
+        <div class="mockup-bar">
+          <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <span>AI Render Bridge (Premiere panel)</span>
+        </div>
+        <div class="mockup-body">
+          <div class="panel-hdr">
+            <span class="dot-sm blue"></span>
+            AI Render Bridge
+          </div>
+          <div class="p-status watching">New job ready — click Apply to import into Premiere.</div>
+          <div class="job-card">
+            <div class="jname">AI Render editable sequence</div>
+            <div class="jmeta">Job 7d8424669e18 · expires in 14 min</div>
+          </div>
+          <button class="apply-btn">Apply to Premiere</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h2>Sequence opens in the Timeline</h2>
+      <p>The panel pairs, runs the JSX bridge script, and sends a receipt — all automatically. The editable sequence is open and ready.</p>
+      <div class="mockup">
+        <div class="mockup-bar">
+          <div class="dots"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+          <span>AI Render Bridge · completed</span>
+        </div>
+        <div class="mockup-body">
+          <div class="panel-hdr">
+            <span class="dot-sm green"></span>
+            AI Render Bridge
+          </div>
+          <div class="p-status success">Completed
+Sequence ✓ · Render ✓ · Captions ✓</div>
+          <div class="badges">
+            <span class="badge">✓ Sequence imported</span>
+            <span class="badge">✓ Timeline open</span>
+            <span class="badge">✓ Captions placed</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+  <p><strong>Outdated project link?</strong> Click <em>Reconnect and refresh link</em> first — it re-exports the .prproj before creating a bridge session. The "Connect inside Premiere" button is grayed out when the link is stale.</p>
+  <p><strong>Manual fallback:</strong> Expand <em>"Enter pairing code manually"</em> at the bottom of the panel. Copy the code from the web UI and paste it there.</p>
+</div>

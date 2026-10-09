@@ -1,27 +1,69 @@
 # Rafiei Reel Style — caption look, render defaults, and AI brain tuning.
 # Colours are #RRGGBB (alpha optional as #RRGGBBAA, 00 = opaque).
 name: Rafiei Reel Style
+rafiei_style:
+  caption_emphasis_color: "#FFD700"
+  caption_emphasis_alt_color: "#00E5FF"
+  opening_title: true
+  preferred_effects:
+    - steady__neutral
+    - hold_close__neutral
+    - slow_push__neutral
+    - punch__neutral
+    - slow_pull__neutral
+  avoid_effects:
+    - camera_shake
+    - rgb_split
+    - zoom_blur_transition
+    - emoji_sticker_pop
+  watermark:
+    text: "رضا رفیعی"
+    font: "maneli"
+    position: "bottom_center"
+    opacity: 0.7
+    size: 28
+  credit_lower_third:
+    text: "Founder of RAFIEI HOLDING"
+    font: "RAY-MEDIUM"
+    show_on_intro: true
 captions:
   fonts_dir: presets/fonts
-  persian_font: Vazirmatn   # override font when language is fa
+  persian_font: "Ray ExtraBlack"   # default for Persian captions
   base:
     font: Arial
-    size: 78
+    size: 72
     bold: true
+    weight: 900
     colour: "#FFFFFF"
     outline_colour: "#000000"
-    outline: 6
+    outline: 4
     shadow: 0
     margin_bottom: 520
     margin_sides: 110
   styles:
     normal: {}
     emphasis:
-      colour: "#FFD700"
-      size: 92
+      # Keep the subtitle feed visually stable. The previous whole-line gold
+      # treatment looked like the subtitle colour was changing mid-video.
+      colour: "#FFFFFF"
+      size: 82
     cta:
+      colour: "#FFD43B"
+      size: 80
+    cover:
       colour: "#FFFFFF"
       size: 84
+      weight: 900
+      outline: 3
+      margin_bottom: 1480
+      split_min_words: 4
+      primary_size: 72
+      primary_y: 180
+      primary_height: 110
+      accent_colour: "#FFD43B"
+      accent_size: 92
+      accent_y: 285
+      accent_height: 130
   # Stage 2: caption generation rules
   min_words: 2
   max_words: 5

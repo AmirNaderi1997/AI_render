@@ -1,0 +1,34 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "source": "../media/raw.mp4",
+  "segments": [
+    {
+      "id": "s1",
+      "in": 0.0,
+      "out": 2.0
+    },
+    {
+      "id": "s2",
+      "in": 3.0,
+      "out": 5.5
+    },
+    {
+      "id": "s3",
+      "in": 7.0,
+      "out": 9.0
+    }
+  ],
+  "captions": [],
+  "broll": [],
+  "sfx": [],
+  "export": {
+    "file": "out_pause_removal.mp4",
+    "crf": 23
+  }
+}

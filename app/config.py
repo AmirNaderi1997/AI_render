@@ -1,0 +1,50 @@
+"""Central configuration for local and database-backed deployments."""
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: str = ""
+    REDIS_URL: str = ""
+    JWT_SECRET: str = ""
+    JWT_ACCESS_HOURS: int = 24
+    JWT_REFRESH_DAYS: int = 30
+    AI_PROVIDER: str = "jarvis"
+    AI_PROVIDER_TIMEOUT_SECONDS: int = 300
+    AI_CORRECTION_TIMEOUT_SECONDS: int = 45
+    LLM_PROVIDER: str = "anthropic"
+    LLM_MODEL: str = "claude-sonnet-5-5"
+    VISION_PROVIDER: str = ""
+    VISION_MODEL: str = "gpt-5-5-image"
+    CONTENT_VOICE_PROVIDER: str = "edge"
+    SAROVI_API_KEY: str = ""
+    SAROVI_TTS_MODEL: str = ""
+    SAROVI_TTS_VOICE: str = ""
+    TTS_VOICE_ID: str = ""
+    TTS_RATE: str = "+0%"
+    JARVIS_API_KEY: str = ""
+    JARVIS_BASE_URL: str = ""
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
+    OPENAI_BASE_URL: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    ELEVENLABS_API_KEY: str = ""
+    JOBS_DIR: str = "jobs"
+    ASSETS_DIR: str = "assets"
+    PRESETS_DIR: str = "presets"
+    APP_ENV: str = "development"
+    CORS_ORIGINS: str = ""
+    ALLOWED_HOSTS: str = ""
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+
+settings = Settings()

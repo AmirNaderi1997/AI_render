@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Render Bridge</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px; color: #eee; background: #252525; font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; }
+
+    h1 { margin: 0 0 14px; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+    /* Status banner */
+    #banner {
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #1e1e1e;
+      border-left: 3px solid #555;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 48px;
+      transition: border-color 0.2s;
+    }
+    #banner.watching { border-left-color: #4b78ff; }
+    #banner.ok       { border-left-color: #51cf66; color: #9fe3b1; }
+    #banner.error    { border-left-color: #ff6b6b; color: #ff9c9c; }
+    #banner.partial  { border-left-color: #f5a623; color: #f5c87a; }
+
+    /* Pending job card */
+    #job-card {
+      display: none;
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #1a2540;
+      border: 1px solid #2d4080;
+    }
+    #job-card.visible { display: block; }
+    #job-name { font-weight: 600; font-size: 14px; margin: 0 0 4px; }
+    #job-meta { font-size: 11px; color: #8899bb; margin: 0; }
+
+    /* Buttons */
+    #apply-btn {
+      display: none;
+      width: 100%;
+      margin-top: 10px;
+      padding: 11px 14px;
+      border: 0;
+      border-radius: 6px;
+      background: #4b78ff;
+      color: white;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #apply-btn.visible { display: block; }
+    #apply-btn:hover:not(:disabled) { background: #3a63dd; }
+    #apply-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Pulse dot */
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #4b78ff;
+      animation: pulse 1.6s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.3; }
+    }
+    .dot.idle { background: #555; animation: none; }
+    .dot.ok   { background: #51cf66; animation: none; }
+    .dot.error { background: #ff6b6b; animation: none; }
+
+    /* Manual code fallback */
+    details { margin-top: 16px; }
+    summary { font-size: 11px; color: #777; cursor: pointer; user-select: none; }
+    summary:hover { color: #aaa; }
+    .manual-area { margin-top: 10px; }
+    label { display: block; margin-bottom: 5px; font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.4px; }
+    input {
+      width: 100%; padding: 10px 12px;
+      color: #fff; background: #1a1a1a;
+      border: 1px solid #444; border-radius: 6px;
+      font: inherit; text-transform: uppercase; letter-spacing: 2px;
+    }
+    input:focus { outline: none; border-color: #4b78ff; }
+    input::placeholder { color: #555; letter-spacing: 1px; }
+    #manual-btn {
+      width: 100%; margin-top: 8px; padding: 9px 12px;
+      border: 1px solid #444; border-radius: 6px;
+      background: transparent; color: #ccc;
+      font: inherit; cursor: pointer;
+    }
+    #manual-btn:hover { background: #333; }
+    #manual-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .port-row { margin-top: 12px; display: flex; align-items: center; gap: 6px; font-size: 11px; color: #666; }
+    .port-row input { width: 70px; padding: 4px 8px; letter-spacing: 0; }
+  </style>
+</head>
+<body>
+  <h1>
+    <span class="dot" id="dot"></span>
+    AI Render Bridge
+  </h1>
+
+  <div id="banner" class="watching">Connecting to AI Render…</div>
+
+  <div id="job-card">
+    <p id="job-name"></p>
+    <p id="job-meta"></p>
+  </div>
+
+  <button id="apply-btn">Apply to Premiere</button>
+
+  <details id="manual-section">
+    <summary>Enter pairing code manually</summary>
+    <div class="manual-area">
+      <label for="code">Pairing Code</label>
+      <input id="code" type="text" autocomplete="off" spellcheck="false" placeholder="ABCD-1234-EF56" maxlength="14">
+      <button id="manual-btn">Connect</button>
+    </div>
+  </details>
+
+  <div class="port-row">
+    <span>Backend port:</span>
+    <input id="port-input" type="text" value="8000" maxlength="5">
+  </div>
+
+  <script src="js/panel.js"></script>
+</body>
+</html>

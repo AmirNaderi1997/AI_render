@@ -277,8 +277,49 @@ EFFECT_FAMILIES_V4.update({
     },
 })
 
+# Keep effects that have no timeline-safe MLT implementation out of the
+# planner and editor selectors. Their old IDs remain recognizable so existing
+# plans fail with a useful validation message instead of silently doing
+# nothing.
+UNSUPPORTED_EFFECTS = {
+    "speed_ramp": "speed ramps change clip timing and are not safe in a fixed-frame segment",
+    "light_leak_overlay": "light leak overlays need a real imported overlay track",
+    "text_pop_scale": "animated caption scale is not implemented in the subtitle track",
+    "emoji_sticker_pop": "sticker assets and timing are not implemented in the render graph",
+    "zoom_blur_transition": "transitions must be configured on a segment boundary",
+}
+RENDERABLE_EXTENDED_EFFECTS = set(EXTENDED_EFFECTS) - set(UNSUPPORTED_EFFECTS)
+
+
+def is_renderable_effect(effect_id: str) -> bool:
+    return effect_id in _LEGACY_CATALOG or effect_id in RENDERABLE_EXTENDED_EFFECTS
+
+
+for _family_name, _family in list(EFFECT_FAMILIES_V4.items()):
+    _family["ids"] = [effect_id for effect_id in _family.get("ids", [])
+                      if is_renderable_effect(effect_id)]
+    if not _family["ids"]:
+        del EFFECT_FAMILIES_V4[_family_name]
+
 # Merge legacy effects into extended catalog
 EFFECT_CATALOG_V4 = {**_LEGACY_CATALOG, **EXTENDED_EFFECTS}
+
+
+def catalog_for_api() -> list[dict]:
+    """Expose only effects that have an MLT implementation."""
+    roles = {effect_id: family["best_roles"]
+             for family in _LEGACY_FAMILIES.values() for effect_id in family["ids"]}
+    return [
+        {**effect,
+         "energy": effect.get("energy", 2),
+         "mood": effect.get("mood", "neutral"),
+         "best_roles": effect.get("best_roles", roles.get(effect_id, [])),
+         "category": effect.get("category", "motion" if effect_id in _LEGACY_CATALOG else "overlay"),
+         "motion": effect.get("motion", effect.get("category", "")),
+         "light": effect.get("light", "")}
+        for effect_id, effect in EFFECT_CATALOG_V4.items()
+        if is_renderable_effect(effect_id)
+    ]
 
 # ============================================================================
 # CUSTOM MY_EFFECTS SYSTEM: User favorites, rules, weights
@@ -293,6 +334,7 @@ class MyEffectsPreset:
         self.rules = []  # [{text: str, priority: "hard|soft"}]
         self.dislikes = set()  # effect_ids to never use
         self.custom_assets = {}  # {name: {type, path, tags, when_to_use}}
+        self.selected_rafiei_style: Optional[str] = None
         self.load()
 
     def load(self):
@@ -304,6 +346,7 @@ class MyEffectsPreset:
             self.rules = data.get("rules", [])
             self.dislikes = set(data.get("dislikes", []))
             self.custom_assets = data.get("custom_assets", {})
+            self.selected_rafiei_style = data.get("selected_rafiei_style")
 
     def save(self):
         """Save to YAML."""
@@ -314,6 +357,7 @@ class MyEffectsPreset:
             "rules": self.rules,
             "dislikes": list(self.dislikes),
             "custom_assets": self.custom_assets,
+            "selected_rafiei_style": self.selected_rafiei_style,
         }
         self.yaml_path.write_text(yaml.dump(data, allow_unicode=True, default_flow_style=False))
 
@@ -395,13 +439,16 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
     """Generate MLT filter XML for v4 effects.
 
     Falls back to v3 rendering if effect not found.
-    Returns empty string if effect cannot render (logs disabled).
+    Unsupported extended effects fail rather than silently rendering unchanged.
     """
     from engine.effects import effect_filter_xml as legacy_render
 
     if effect_id not in EXTENDED_EFFECTS:
         return legacy_render(effect_id, frames, width, height, punch_frames,
                              cover_scale=cover_scale)
+
+    if effect_id in UNSUPPORTED_EFFECTS:
+        raise ValueError(f"effect {effect_id!r} cannot be rendered: {UNSUPPORTED_EFFECTS[effect_id]}")
 
     spec = EXTENDED_EFFECTS[effect_id]
     result = ""
@@ -413,28 +460,38 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
                   f'<property name="transition.rect">0={_rect(cs, width, height)}</property>'
                   f'<property name="transition.fill">1</property></filter>')
 
-    # Camera shake: use frei0r/Perlin noise if available, else affine-based jitter
+    # Camera shake: deterministic small translations over an overscanned frame.
     if effect_id == "camera_shake":
-        intensity = spec["params"].get("intensity", 2)
-        freq = spec["params"].get("frequency", 8)
+        intensity = max(1, int(spec["params"].get("intensity", 2)))
+        freq = max(1, int(spec["params"].get("frequency", 8)))
+        step = max(1, round(30 / (freq * 2)))
+        scale = 1.06 * cs
+        w, h = width * scale, height * scale
+        offsets = ((intensity, -intensity), (-intensity, intensity),
+                   (intensity, intensity), (-intensity, -intensity))
+        keyframes = []
+        for frame in range(0, max(frames, 1), step):
+            dx, dy = offsets[(frame // step) % len(offsets)]
+            x, y = (width - w) / 2 + dx, (height - h) / 2 + dy
+            keyframes.append(f"{frame}={x:.1f} {y:.1f} {w:.1f} {h:.1f} 1")
         result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0={_rect(1.0 * cs, width, height)}</property>
+            <property name="transition.rect">{';'.join(keyframes)}</property>
             <property name="transition.fill">1</property>
         </filter>"""
 
     # Freeze frame + zoom
     elif effect_id == "freeze_frame_zoom":
         zoom_to = spec["params"].get("zoom_to", 1.3)
-        hold_f = min(spec["params"].get("hold_frames", 3), frames - 1)
+        hold_f = min(max(0, spec["params"].get("hold_frames", 3)), max(frames - 1, 0))
+        zoom_end = min(max(frames - 1, 0), hold_f + 15)
+        result += f"""<filter mlt_service="freeze">
+            <property name="frame">{hold_f}</property>
+            <property name="freeze_after">1</property>
+        </filter>"""
         result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0={_rect(1.0 * cs, width, height)};{hold_f}={_rect(zoom_to * cs, width, height)}</property>
+            <property name="transition.rect">0={_rect(1.0 * cs, width, height)};{zoom_end}={_rect(zoom_to * cs, width, height)}</property>
             <property name="transition.fill">1</property>
         </filter>"""
-
-    # Speed ramp: variable playback speed
-    elif effect_id == "speed_ramp":
-        # Use MLT speed filter (complex timing)
-        result += """<filter mlt_service="speed"><property name="map">0=0.5;100=1.5</property></filter>"""
 
     # Blur in: keyframe the supported MLT blur parameter down to its minimum.
     elif effect_id == "blur_in":
@@ -452,41 +509,33 @@ def effect_filter_xml_v4(effect_id: str, frames: int, width: int, height: int,
             <property name="opacity">0=0;{min(8, max(frames - 1, 1))}={strength};{max(frames - 1, 1)}=0.08</property>
         </filter>"""
 
-    # RGB split: offset channels (complex, may not render)
+    # RGB split: shift the red and blue channels in opposite directions.
     elif effect_id == "rgb_split":
-        # Placeholder: would need custom filter or complex filter chain
-        result += """<!-- RGB split not yet supported in MLT; disabled -->"""
-
-    # Light leak overlay: composite overlay video
-    elif effect_id == "light_leak_overlay":
-        overlay = spec["params"].get("overlay_file", "assets/overlays/light_leak_warm.mp4")
-        opacity = spec["params"].get("opacity", 0.3)
-        result += f"""<filter mlt_service="composite">
-            <property name="src">{overlay}</property>
-            <property name="mix">{opacity}</property>
+        offset = int(spec["params"].get("offset_px", 3))
+        result += f"""<filter mlt_service="avfilter.rgbashift">
+            <property name="av.rh">{offset}</property>
+            <property name="av.bh">{-offset}</property>
+            <property name="av.edge">smear</property>
         </filter>"""
 
-    # White/black flash: color overlay for 1 frame
+    # A one-frame exposure flash at the beginning of the segment.
     elif effect_id in ("white_flash", "black_flash"):
-        color = "ffffff" if effect_id == "white_flash" else "000000"
-        result += f"""<filter mlt_service="color"><property name="color">{color}</property></filter>"""
+        brightness = 1 if effect_id == "white_flash" else -1
+        result += f"""<filter mlt_service="avfilter.eq">
+            <property name="av.brightness">0={brightness};1=0</property>
+            <property name="av.eval">frame</property>
+        </filter>"""
 
-    # Text pop / emoji pop: handled at caption/sticker level, not as filter
-    elif effect_id in ("text_pop_scale", "emoji_sticker_pop"):
-        result += """<!-- Text/emoji pop handled in caption/sticker rendering -->"""
-
-    # Zoom blur transition
-    elif effect_id == "zoom_blur_transition":
-        blur = spec["params"].get("blur_strength", 0.8)
-        zoom = spec["params"].get("zoom_out", 1.5)
-        result += f"""<filter mlt_service="affine">
-            <property name="transition.rect">0={_rect(1.0 * cs, width, height)};{frames-1}={_rect(zoom * cs, width, height)}</property>
-        </filter>
-        <filter mlt_service="boxblur"><property name="radius">{blur * 10},0</property></filter>"""
-
-    # B&W flash
+    # Desaturate briefly, then restore the original colour.
     elif effect_id == "black_and_white_flash":
-        result += """<filter mlt_service="mono"></filter>"""
+        if frames <= 10:
+            saturation = "0"
+        else:
+            saturation = "0=0;9=0;10=1"
+        result += f"""<filter mlt_service="avfilter.hue">
+            <property name="av.s">{saturation}</property>
+            <property name="position">filter</property>
+        </filter>"""
 
     return result
 
@@ -502,18 +551,19 @@ def _rect(z: float, width: int, height: int, x: float = 0.5, y: float = 0.5) -> 
 # ============================================================================
 
 def generate_preview_clips(video_path: Path, output_dir: Path):
-    """Generate 2-second preview clips for all enabled effects into output_dir.
+    """Actually render short previews for every selectable effect.
 
-    For each effect:
-      - Extract 2 seconds from video (middle segment)
-      - Apply the effect using engine.render
-      - Save as assets/effect_previews/{effect_id}.mp4
-      - Skip effects that cannot render
+    An effect is reported as rendered only after ffprobe confirms the temporary
+    MP4 has a video stream and positive duration.
     """
     import subprocess
     import logging
+    import math
 
     log = logging.getLogger(__name__)
+    video_path = Path(video_path).resolve()
+    if not video_path.is_file():
+        raise FileNotFoundError(video_path)
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Get video duration
@@ -524,33 +574,51 @@ def generate_preview_clips(video_path: Path, output_dir: Path):
             capture_output=True, text=True, timeout=10
         )
         duration = float(result.stdout.strip())
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("video has no positive finite duration")
     except Exception as e:
         log.error(f"Cannot probe video: {e}")
-        return
+        return [], [("source", str(e))]
 
-    # 2-second preview from middle
-    mid = max(2, duration / 2 - 1)
-    preview_start = max(0, mid - 1)
-    preview_end = min(duration, preview_start + 2)
+    preview_duration = min(2.0, duration)
+    preview_start = max(0.0, (duration - preview_duration) / 2)
+    preview_end = preview_start + preview_duration
+    if round(preview_duration * 30) < 1:
+        return [], [("source", "video is shorter than one 30 fps frame")]
 
     # Track which effects actually rendered
     rendered = []
     failed = []
 
-    for effect_id, spec in EFFECT_CATALOG_V4.items():
-        output_file = output_dir / f"{effect_id}.mp4"
+    from engine.schema import EditPlan
+    from engine.build_mlt import build
+    from engine.render import render
 
-        # Skip if already rendered
-        if output_file.exists():
-            rendered.append(effect_id)
+    for effect_id, spec in EFFECT_CATALOG_V4.items():
+        if not is_renderable_effect(effect_id):
             continue
+        output_file = output_dir / f"{effect_id}.mp4"
+        temporary_file = output_dir / f".{effect_id}.pending.mp4"
+
+        # Reuse only a playable, nonempty cached artifact.
+        if output_file.exists():
+            try:
+                media = json.loads(subprocess.check_output([
+                    "ffprobe", "-v", "error", "-show_entries",
+                    "format=duration:stream=codec_type", "-of", "json", str(output_file),
+                ], text=True, timeout=10))
+                valid = (output_file.stat().st_size > 0
+                         and float(media.get("format", {}).get("duration", 0)) > 0
+                         and any(s.get("codec_type") == "video" for s in media.get("streams", [])))
+                if valid:
+                    rendered.append(effect_id)
+                    continue
+            except Exception:
+                pass
+            output_file.unlink(missing_ok=True)
 
         try:
-            # Create minimal plan for this effect
-            from engine.schema import EditPlan
-
-            frames = int((preview_end - preview_start) * 30)
-            plan = {
+            plan = EditPlan(**{
                 "version": "0.2",
                 "style": "rafiei_reel",
                 "canvas": {"width": 1080, "height": 1920, "fps": 30},
@@ -564,19 +632,26 @@ def generate_preview_clips(video_path: Path, output_dir: Path):
                 "visual_effects": [{"segment_id": "s1", "type": effect_id}],
                 "captions": [],
                 "broll": [],
-                "music": {"file": "", "volume_db": 0, "duck": []},
                 "sfx": [],
                 "export": {"file": str(output_file), "crf": 20},
-            }
-
-            # Render using engine.render (simplified version would just try MLT)
-            # For now: log that preview generation would happen here
-            log.info(f"Would render preview for {effect_id} → {output_file}")
+            })
+            build_dir = output_dir / f".{effect_id}.build"
+            mlt, _ = build(plan, build_dir, base_dir=video_path.parent)
+            render(mlt, temporary_file, preview=True)
+            media = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries",
+                "format=duration:stream=codec_type", "-of", "json", str(temporary_file),
+            ], text=True, timeout=10))
+            if (not any(s.get("codec_type") == "video" for s in media.get("streams", []))
+                    or float(media.get("format", {}).get("duration", 0)) <= 0):
+                raise RuntimeError("rendered effect preview has no playable video stream")
+            temporary_file.replace(output_file)
             rendered.append(effect_id)
 
         except Exception as e:
             log.warning(f"Cannot render preview for {effect_id}: {e}")
-            failed.append(effect_id)
+            temporary_file.unlink(missing_ok=True)
+            failed.append((effect_id, str(e)))
 
     log.info(f"Rendered {len(rendered)} effect previews; {len(failed)} failed")
     return rendered, failed

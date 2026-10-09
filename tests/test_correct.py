@@ -152,6 +152,20 @@ def test_llm_failure_returns_empty():
     assert usage.input_tokens == 0
 
 
+def test_llm_timeout_skips_optional_correction_without_retry():
+    class APITimeoutError(Exception):
+        pass
+
+    with patch.dict("os.environ", {"AI_CORRECTION_TIMEOUT_SECONDS": "17"}), \
+            patch("brain.correct.chat_json", side_effect=APITimeoutError("Request timed out")) as mock_llm:
+        corrections, usage = auto_correct(TRANSCRIPT, PRESET_WITH_THRESHOLD, GLOSSARY)
+
+    assert corrections == []
+    assert usage.input_tokens == 0
+    mock_llm.assert_called_once()
+    assert mock_llm.call_args.kwargs["timeout_seconds"] == 17.0
+
+
 def test_correction_timing_preserved(tmp_path):
     """Auto-applied correction keeps the original word's start/end times."""
     raw = {

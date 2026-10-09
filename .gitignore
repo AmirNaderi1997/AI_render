@@ -5,6 +5,7 @@ venv/
 node_modules/
 web/dist/
 jobs/
+/backups/
 samples/media/
 samples/plans/out*.mp4
 samples/plans/kdenlive_check.mp4
@@ -27,3 +28,9 @@ proof/*.png
 docs/effects_showcase.mp4
 docs/effects_v4_frames/
 assets/effect_previews/
+.jwt_secret
+
+# Docker
+backups/
+nginx/certs/
+/certs/

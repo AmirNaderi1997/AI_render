@@ -44,7 +44,8 @@ def analyse_segments(
     source_captions: planned captions mapped to output timeline (optional, enriches context)
 
     Returns (analyses, usage) where each analysis is:
-        {segment_id, role, energy, emotion, key_words, is_turning_point}
+        {segment_id, role, energy, emotion, key_words, is_turning_point,
+         shareability_score}
     Falls back to a heuristic if the LLM fails (never breaks the caller).
     """
     if not segments:
@@ -111,9 +112,10 @@ For each segment return a JSON analysis with:
   - emotion: one word (e.g. curious, assertive, warm, urgent, reflective, playful)
   - key_words: 1-3 most important words (in the source language)
   - is_turning_point: true if this is a structural shift (from problem→solution, question→answer, buildup→payoff){signals_note}
+  - shareability_score: 1-10 for how strong this exact spoken idea is as a short cover hook. Reward a self-contained benefit, surprising contrast, curiosity, specificity, and emotional punch. Do not reward clickbait that is unsupported by the transcript.
 
 Output ONLY this JSON:
-{{"segments": [{{"id": "<seg_id>", "role": "<role>", "energy": <1-5>, "emotion": "<word>", "key_words": ["<w1>"], "is_turning_point": <bool>}}]}}"""
+{{"segments": [{{"id": "<seg_id>", "role": "<role>", "energy": <1-5>, "emotion": "<word>", "key_words": ["<w1>"], "is_turning_point": <bool>, "shareability_score": <1-10>}}]}}"""
 
     def _seg_line(s: dict) -> str:
         line = f"Segment {s['id']} ({s['duration']}s): {s['text']!r}"
@@ -135,7 +137,8 @@ Output ONLY this JSON:
     )
 
     try:
-        raw, usage = chat_json(system, user, max_tokens=1024, temperature=0.0)
+        raw, usage = chat_json(system, user, max_tokens=1024, temperature=0.0,
+                               timeout_seconds=300)
     except Exception as exc:
         log.warning("segment analysis LLM call failed: %s — using heuristic", exc)
         return _heuristic_analysis(segments, seg_texts), LLMUsage()
@@ -154,6 +157,7 @@ Output ONLY this JSON:
             "emotion": str(item.get("emotion", "neutral"))[:30],
             "key_words": [str(w)[:40] for w in (item.get("key_words") or [])[:3]],
             "is_turning_point": bool(item.get("is_turning_point", False)),
+            "shareability_score": max(1, min(10, int(item.get("shareability_score", 5)))),
         })
 
     # Fill in any segments the LLM missed
@@ -174,6 +178,14 @@ def _heuristic_one(seg: dict, text_info: dict, index: int) -> dict:
         role = "question"
     if any(w in text for w in ("لازم نیست", "نداره", "رایگان")):
         role = "claim"
+    shareability = 4
+    if role in {"hook", "claim", "contrast", "question", "conclusion"}:
+        shareability += 2
+    if any(w in text for w in ("لازم نیست", "نمیخواد", "نمی‌خواد", "نداره", "بدون", "چرا", "راز")):
+        shareability += 2
+    word_count = len(text_info.get("text", "").split())
+    if 3 <= word_count <= 9:
+        shareability += 1
     return {
         "segment_id": seg["id"],
         "role": role,
@@ -181,6 +193,7 @@ def _heuristic_one(seg: dict, text_info: dict, index: int) -> dict:
         "emotion": "neutral",
         "key_words": [],
         "is_turning_point": False,
+        "shareability_score": min(10, shareability),
     }
 
 

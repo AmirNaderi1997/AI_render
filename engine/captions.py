@@ -20,13 +20,36 @@ import yaml
 
 from .schema import PROJECT_ROOT, Caption, Plan
 
-STYLE_NAMES = ("normal", "emphasis", "cta")
+STYLE_NAMES = ("normal", "emphasis", "cta", "cover")
+
+
+def render_font_family(selected: str) -> str:
+    """Translate UI font-file labels to the family names Fontconfig renders.
+
+    The RAY files expose families such as ``Ray ExtraBlack`` rather than the
+    filename stem ``RAY-EXTRABLACK`` shown by the font picker.
+    """
+    normalized = selected.strip().replace("_", "-").upper()
+    ray_styles = {
+        "RAY": "Ray",
+        "RAY-LIGHT": "Ray Light",
+        "RAY-MEDIUM": "Ray Medium",
+        "RAY-BOLD": "Ray Bold",
+        "RAY-EXTRABOLD": "Ray ExtraBold",
+        "RAY-BLACK": "Ray Black",
+        "RAY-EXTRABLACK": "Ray ExtraBlack",
+    }
+    return ray_styles.get(normalized, selected)
 
 
 def load_style(name: str = "rafiei_reel") -> dict:
-    path = PROJECT_ROOT / "presets" / f"{name}.yaml"
+    preset_dir = (PROJECT_ROOT / "presets").resolve()
+    candidate = (preset_dir / f"{name}.yaml").resolve()
+    if candidate.parent != preset_dir or Path(name).name != name:
+        raise ValueError(f"invalid style preset name: {name!r}")
+    path = candidate
     if not path.exists():
-        path = PROJECT_ROOT / "presets" / "rafiei_reel.yaml"
+        path = preset_dir / "rafiei_reel.yaml"
     return yaml.safe_load(path.read_text())
 
 
@@ -79,12 +102,22 @@ def _plan_is_persian(plan: Plan) -> bool:
     return any(_has_persian(c.text) for c in plan.captions)
 
 
+def caption_scale(canvas_w: int, canvas_h: int) -> float:
+    """Scale preset typography from its reference 1080x1920 reel canvas."""
+    return min(canvas_w / 1080.0, canvas_h / 1920.0)
+
+
 def build_ass(plan: Plan, style: dict) -> str:
     W, H = plan.canvas.width, plan.canvas.height
+    scale = caption_scale(W, H)
     cap = style.get("captions", {})
     base = dict(cap.get("base", {}))
     if _plan_is_persian(plan) and "persian_font" in cap:
         base = {**base, "font": cap["persian_font"]}
+    from .font_library import family_for_plan
+    selected_font = family_for_plan(plan.canvas)
+    if selected_font:
+        base["font"] = render_font_family(selected_font)
     lines = ["[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
              "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
              "[V4+ Styles]",
@@ -93,15 +126,24 @@ def build_ass(plan: Plan, style: dict) -> str:
              "Alignment, MarginL, MarginR, MarginV, Encoding"]
     for name in STYLE_NAMES:
         s = {**base, **(cap.get("styles", {}).get(name) or {})}
+        if selected_font:
+            s["font"] = render_font_family(selected_font)
+        def scaled(key: str, default: int) -> int:
+            return max(0, int(round(float(s.get(key, default)) * scale)))
         lines.append(
-            f"Style: {name},{s.get('font', 'Arial')},{s.get('size', 78)},"
+            f"Style: {name},{s.get('font', 'Arial')},{max(1, scaled('size', 78))},"
             f"{ass_colour(s.get('colour', '#FFFFFF'))},&H000000FF,{ass_colour(s.get('outline_colour', '#000000'))},"
             f"&H80000000,{-1 if s.get('bold', True) else 0},0,0,0,100,100,0,0,1,"
-            f"{s.get('outline', 6)},{s.get('shadow', 0)},2,{s.get('margin_sides', 60)},"
-            f"{s.get('margin_sides', 60)},{s.get('margin_bottom', 520)},1")
+            f"{scaled('outline', 6)},{scaled('shadow', 0)},2,{scaled('margin_sides', 60)},"
+            f"{scaled('margin_sides', 60)},{scaled('margin_bottom', 520)},1")
     lines += ["", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     for c in plan.captions:
         lines.append(f"Dialogue: 0,{ass_time(c.start)},{ass_time(c.end)},{c.style},,0,0,0,,{ass_text(c.text)}")
+    if plan.cover:
+        lines.append(
+            f"Dialogue: 1,{ass_time(plan.cover.start)},{ass_time(plan.cover.end)},cover,,0,0,0,,"
+            f"{ass_text(plan.cover.text)}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -132,8 +174,22 @@ def build_srts(plan: Plan) -> Dict[str, str]:
     even across different SRT feeds, never paint on the same frame.
     """
     buckets: Dict[str, List[Caption]] = {name: [] for name in STYLE_NAMES}
-    for c in plan.captions:
+    for original in plan.captions:
+        c = original
+        if plan.cover and c.start < plan.cover.end and c.end > plan.cover.start:
+            # Keep the caption in plan.json for review/history, but do not
+            # paint a second lower sentence while the opening title is active.
+            if c.end <= plan.cover.end:
+                continue
+            c = c.model_copy(update={"start": plan.cover.end})
         buckets.setdefault(c.style, []).append(c)
+    if plan.cover:
+        buckets["cover"].append(Caption(
+            start=plan.cover.start,
+            end=plan.cover.end,
+            text=plan.cover.text,
+            style="cover",
+        ))
 
     frame = 1.0 / float(plan.canvas.fps)
     out: Dict[str, str] = {}
@@ -162,11 +218,12 @@ def style_geometry(style_cfg: dict, canvas_w: int, canvas_h: int) -> str:
     """MLT subtitle geometry rect ``x/y:WxH:opacity`` in px, centred horizontally,
     bottom-anchored using margin_bottom from the preset.
     """
-    margin_sides = int(style_cfg.get("margin_sides", 60))
-    margin_bottom = int(style_cfg.get("margin_bottom", 520))
-    font_size = int(style_cfg.get("size", 78))
+    scale = caption_scale(canvas_w, canvas_h)
+    margin_sides = int(round(float(style_cfg.get("margin_sides", 60)) * scale))
+    margin_bottom = int(round(float(style_cfg.get("margin_bottom", 520)) * scale))
+    font_size = max(1, int(round(float(style_cfg.get("size", 78)) * scale)))
     # Give ~2 lines of headroom.
-    h = font_size * 2 + 40
+    h = font_size * 2 + int(round(40 * scale))
     w = canvas_w - 2 * margin_sides
     y = canvas_h - margin_bottom - h
     return f"{margin_sides}/{y}:{w}x{h}:100"

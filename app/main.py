@@ -1,406 +1,179 @@
-"""FastAPI backend for Rafiei AI Editor Stage 1.
+"""FastAPI backend for Rafiei AI Editor.
 
-Run: uvicorn app.main:app --reload --port 8000
+Run: .venv/bin/python -m uvicorn app.main:app --reload --port 8000
 """
 from __future__ import annotations
+
+from contextlib import asynccontextmanager
+import importlib.util
 import json
 import logging
-from pathlib import Path
-from typing import Optional
+import os
+import re
+import sys
+import time
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.responses import JSONResponse
 
-from engine.kdenlive import open_in_kdenlive
-from engine.schema import validate_plan
-from engine.effects import catalog_for_api
-from . import jobs as jobstore
+from logging_config import configure_structured_logging
+configure_structured_logging()
 
+from . import auth, jobs as jobstore
+from .auth_routes import router as auth_router
+from .database import DB_AVAILABLE, init_db
+from .config import settings
+from .routers import content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
 
 log = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="Rafiei AI Editor", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.APP_ENV == "production" and (not settings.JWT_SECRET or not DB_AVAILABLE or not settings.REDIS_URL):
+        raise RuntimeError("Production requires JWT_SECRET, DATABASE_URL, and REDIS_URL")
+    if DB_AVAILABLE:
+        await init_db(create_schema=not production)
+        log.info("Database connected")
+    else:
+        log.info("Running in JSON fallback mode (no DATABASE_URL)")
+    missing = [name for name in ("elevenlabs", "faster_whisper")
+               if importlib.util.find_spec(name) is None]
+    if missing:
+        log.warning(
+            "Python runtime %s is missing %s; start the backend with "
+            ".venv/bin/python -m uvicorn app.main:app --port 8000",
+            sys.executable,
+            ", ".join(missing),
+        )
+    else:
+        log.info("Python runtime %s has ElevenLabs and Whisper available", sys.executable)
+    n = jobstore.rescan()
+    log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
+    yield
+
+
+production = settings.APP_ENV == "production"
+if production:
+    if len(settings.JWT_SECRET) < 32:
+        raise RuntimeError("JWT_SECRET must be at least 32 characters in production")
+    origins = [x.strip() for x in settings.CORS_ORIGINS.split(",") if x.strip()]
+    if any(not x.startswith("https://") or "*" in x for x in origins):
+        raise RuntimeError("CORS_ORIGINS must contain exact HTTPS origins in production")
+else:
+    origins = ["http://localhost:5173", "http://127.0.0.1:5173", "null"]
+app = FastAPI(title="Rafiei AI Editor", version="0.1.0", lifespan=lifespan,
+              docs_url=None if production else "/docs", redoc_url=None if production else "/redoc",
+              openapi_url=None if production else "/openapi.json")
+
+enforce_allowed_hosts = any(
+    value.strip().lower() == "production"
+    for value in (
+        settings.APP_ENV,
+        os.environ.get("APP_ENV", ""),
+        os.environ.get("ENV", ""),
+        os.environ.get("ENVIRONMENT", ""),
+    )
+)
+if enforce_allowed_hosts:
+    hosts = [x.strip() for x in settings.ALLOWED_HOSTS.split(",") if x.strip()]
+    if not hosts or any("*" in host for host in hosts):
+        raise RuntimeError("ALLOWED_HOSTS requires exact hostnames in production")
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+elif settings.ALLOWED_HOSTS.strip():
+    log.warning("ALLOWED_HOSTS is configured but ignored because APP_ENV/ENV/ENVIRONMENT is not production")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=not production or bool(origins),
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
-@app.on_event("startup")
-def _rescan_jobs_on_startup() -> None:
-    n = jobstore.rescan()
-    log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    if exc.status_code >= 500:
+        log.error("server_error status=%s path=%s", exc.status_code, request.url.path)
+        return JSONResponse({"detail": "Internal server error"}, status_code=exc.status_code)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
+@app.middleware("http")
+async def request_log(request: Request, call_next):
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.error("unhandled request error method=%s path=%s", request.method, request.url.path)
+        raise
+    log.info(json.dumps({"event": "http_request", "method": request.method,
+                         "path": request.url.path, "status": response.status_code,
+                         "duration_ms": round((time.monotonic() - started) * 1000)}))
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+app.include_router(auth_router)
+app.include_router(jobs.router)
+app.include_router(plans.router)
+app.include_router(render.router)
+app.include_router(music.router)
+app.include_router(music.legacy_router)
+app.include_router(effects.router)
+app.include_router(style.router)
+app.include_router(style.legacy_router)
+app.include_router(content.router)
+app.include_router(content.legacy_router)
+app.include_router(denoise.router)
+app.include_router(premiere.router)
+app.include_router(qc.router)
+app.include_router(fonts.router)
+app.include_router(fonts.legacy_router)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    def unauthorized():
+        response = JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+    path = request.url.path
+    if request.method == "OPTIONS" or path == "/" or path.startswith("/auth/"):
+        return await call_next(request)
+    # The CEP panel cannot hold the user's web-app JWT. These protocol routes
+    # are protected by loopback checks, one-time pairing codes, and the
+    # operation-scoped bearer token validated by premiere_bridge itself.
+    if path in {
+        "/integrations/premiere/bridge/pending",
+        "/integrations/premiere/bridge/pair",
+    } or re.fullmatch(r"/jobs/[0-9a-f]{12}/premiere/bridge/receipt", path):
+        return await call_next(request)
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return unauthorized()
+    try:
+        user = (await auth.db_get_current_user_from_token(header[7:])
+                if auth.USE_DB else auth.get_current_user_from_token(header[7:]))
+        request.state.user = user
+    except ValueError:
+        return unauthorized()
+    return await call_next(request)
 
 
 @app.get("/")
 def health():
-    return {"ok": True, "service": "rafiei-ai-editor", "stage": 2}
+    return {"ok": True, "service": "rafiei-ai-editor", "stage": 3}
 
 
-@app.get("/jobs")
-def list_jobs():
-    return [j.to_dict() for j in jobstore.list_jobs()]
-
-
-@app.get("/effects")
-def list_effects():
-    return catalog_for_api()
-
-
-@app.post("/jobs")
-async def create_job(
-    video: UploadFile = File(...),
-    plan: Optional[UploadFile] = File(None),
-    plan_text: Optional[str] = Form(None),
-):
-    job = jobstore.create_job()
-    try:
-        # UploadFile is a spooled temp file: stream it to disk, never .read() it whole.
-        jobstore.save_raw(job, video.filename or "raw.mp4", video.file)
-    except Exception as e:
-        log.exception("upload failed for %r", video.filename)
-        raise HTTPException(500, f"Could not save upload: {e}")
-
-    plan_data: Optional[dict] = None
-    try:
-        if plan is not None:
-            plan_data = json.loads((await plan.read()).decode("utf-8"))
-        elif plan_text:
-            plan_data = json.loads(plan_text)
-    except ValueError as e:
-        log.warning("invalid plan JSON: %s", e)
-        raise HTTPException(422, f"Plan is not valid JSON: {e}")
-
-    errors: list[str] = []
-    if plan_data is not None:
-        _, errors = jobstore.save_plan(job, plan_data)
-
-    return {"job": job.to_dict(), "errors": errors}
-
-
-@app.get("/jobs/{job_id}")
-def get_job(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    d = job.to_dict()
-    plan_path = job.dir / "plan.json"
-    if plan_path.exists():
-        d["plan"] = json.loads(plan_path.read_text())
-    transcript_path = job.dir / "transcript.json"
-    if transcript_path.exists():
-        d["has_transcript"] = True
-    return d
-
-
-class PlanBody(BaseModel):
-    plan: dict
-
-
-@app.put("/jobs/{job_id}/plan")
-def put_plan(job_id: str, body: PlanBody):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    _, errors = jobstore.save_plan(job, body.plan)
-    if errors:
-        return JSONResponse({"ok": False, "errors": errors}, status_code=422)
-    return {"ok": True}
-
-
-@app.post("/jobs/{job_id}/validate")
-def validate(job_id: str, body: PlanBody):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    _, errors = validate_plan(body.plan, base_dir=job.dir, check_media=True)
-    return {"ok": not errors, "errors": errors}
-
-
-class GenerateBody(BaseModel):
-    style: str = "rafiei_reel"
-    instruction: str = ""
-    whisper_model: Optional[str] = None
-    language: Optional[str] = "fa"
-    use_saved_transcript: bool = False
-    transcribe_only: bool = False
-    transcription_hint: str = ""
-    asr_engine: Optional[str] = None
-
-
-@app.post("/jobs/{job_id}/generate-plan")
-def generate_plan(job_id: str, body: GenerateBody = GenerateBody()):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    if not job.raw_name:
-        raise HTTPException(400, "no raw video uploaded")
-    jobstore.start_generate(
-        job,
-        style=body.style,
-        instruction=body.instruction,
-        whisper_model=body.whisper_model,
-        language=body.language,
-        use_saved_transcript=body.use_saved_transcript,
-        transcribe_only=body.transcribe_only,
-        transcription_hint=body.transcription_hint,
-        asr_engine=body.asr_engine,
-    )
-    return {"status": job.generate.status, "stage": job.generate.stage}
-
-
-@app.get("/jobs/{job_id}/generate-plan/status")
-def generate_status(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    g = job.generate
-    return {
-        "status": g.status,
-        "stage": g.stage,
-        "message": g.message,
-        "cost_usd": g.cost_usd,
-        "input_tokens": g.input_tokens,
-        "output_tokens": g.output_tokens,
-        "model": g.model,
-        "asr_engine": g.asr_engine,
-        "asr_audio_seconds": g.asr_audio_seconds,
-        "asr_cost_usd": g.asr_cost_usd,
-        "correction_model": g.correction_model,
-    }
-
-
-@app.get("/jobs/{job_id}/transcript")
-def get_transcript(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    p = job.dir / "transcript.json"
-    if not p.exists():
-        raise HTTPException(404, "transcript not generated yet")
-    from brain.transcribe import effective_transcript
-    return effective_transcript(job.dir)
-
-
-class WordCorrection(BaseModel):
-    index: int
-    text: str
-    start: Optional[float] = None
-    end: Optional[float] = None
-
-
-class CorrectionsBody(BaseModel):
-    base_key: str
-    words: list[WordCorrection]
-
-
-@app.put("/jobs/{job_id}/transcript/corrections")
-def put_transcript_corrections(job_id: str, body: CorrectionsBody):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    if not (job.dir / "transcript.json").exists():
-        raise HTTPException(404, "transcript not generated yet")
-    from brain.transcribe import save_corrections
-    try:
-        return save_corrections(job.dir, body.base_key,
-                                [item.model_dump() for item in body.words])
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.get("/jobs/{job_id}/corrections")
-def get_corrections(job_id: str):
-    """Return auto-correction suggestions from the last generate-plan run."""
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    p = job.dir / "corrections.json"
-    if not p.exists():
-        return {"auto_applied": [], "suggestions": []}
-    return json.loads(p.read_text())
-
-
-class AcceptCorrectionBody(BaseModel):
-    base_key: str
-    index: int
-    old: str
-    new: str
-    start: Optional[float] = None
-    end: Optional[float] = None
-    save_to_glossary: bool = True
-
-
-@app.post("/jobs/{job_id}/corrections/accept")
-def accept_correction(job_id: str, body: AcceptCorrectionBody):
-    """Accept one correction: save to transcript and optionally to glossary.yaml."""
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    if not (job.dir / "transcript.json").exists():
-        raise HTTPException(404, "transcript not generated yet")
-    from brain.transcribe import save_corrections
-    from brain.glossary import save_correction_to_glossary
-    item: dict = {"index": body.index, "text": body.new}
-    if body.start is not None:
-        item["start"] = body.start
-    if body.end is not None:
-        item["end"] = body.end
-    try:
-        result = save_corrections(job.dir, body.base_key, [item])
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    if body.save_to_glossary:
-        save_correction_to_glossary(body.old, body.new)
-    return result
-
-
-class RejectCorrectionBody(BaseModel):
-    index: int
-    old: str
-
-
-@app.post("/jobs/{job_id}/corrections/reject")
-def reject_correction(job_id: str, body: RejectCorrectionBody):
-    """Reject a correction — marks the word as reviewed so it won't be flagged again."""
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    # Return 200 with an acknowledgement — the UI removes it from the list.
-    # The word keeps its original text; we don't write to the transcript.
-    return {"ok": True, "index": body.index, "word": body.old}
-
-
-@app.post("/jobs/{job_id}/render")
-def render(job_id: str, preview: bool = False, loudnorm: bool = False):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    if not (job.dir / "plan.json").exists():
-        raise HTTPException(400, "no plan.json for this job")
-    jobstore.start_render(job, preview=preview, loudnorm=loudnorm)
-    return {"status": job.render.status}
-
-
-@app.get("/jobs/{job_id}/render/status")
-def render_status(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    return {
-        "status": job.render.status,
-        "progress": job.render.progress,
-        "message": job.render.message,
-        "output": job.render.output,
-        "preview": job.render.preview,
-        "versions": job.versions,
-    }
-
-
-@app.get("/jobs/{job_id}/raw")
-def get_raw(job_id: str):
-    job = jobstore.get(job_id)
-    if not job or not job.raw_name:
-        raise HTTPException(404, "no raw video")
-    return FileResponse(job.dir / "raw" / job.raw_name)
-
-
-@app.get("/jobs/{job_id}/exports/{fname}")
-def get_export(job_id: str, fname: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    p = job.dir / "exports" / fname
-    if not p.exists():
-        raise HTTPException(404, "export not found")
-    return FileResponse(p, filename=fname)
-
-
-@app.get("/jobs/{job_id}/plan.json")
-def download_plan(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    p = job.dir / "plan.json"
-    if not p.exists():
-        raise HTTPException(404, "no plan")
-    return FileResponse(p, filename="plan.json", media_type="application/json")
-
-
-@app.post("/jobs/{job_id}/open-kdenlive")
-def open_kdenlive(job_id: str):
-    job = jobstore.get(job_id)
-    if not job:
-        raise HTTPException(404, "job not found")
-    mlt = job.dir / "project.mlt"
-    if not mlt.exists():
-        raise HTTPException(400, "project.mlt not built yet — render first")
-    try:
-        open_in_kdenlive(mlt)
-    except Exception as e:
-        raise HTTPException(500, str(e))
-    return {"ok": True, "path": str(mlt)}
-
-
-# ── My Effects: User preferences for effects ───────────────────────────────────
-
-@app.get("/my-effects")
-def get_my_effects():
-    """Get current My Effects preferences (favorites, rules, dislikes, custom assets)."""
-    from engine.effects_v4 import MyEffectsPreset
-    my_effects = MyEffectsPreset()
-    return {
-        "favorites": my_effects.favorites,
-        "rules": my_effects.rules,
-        "dislikes": list(my_effects.dislikes),
-        "custom_assets": my_effects.custom_assets,
-    }
-
-
-class MyEffectsBody(BaseModel):
-    favorites: dict = {}
-    rules: list = []
-    dislikes: list = []
-    custom_assets: dict = {}
-
-
-@app.put("/my-effects")
-def put_my_effects(body: MyEffectsBody):
-    """Save My Effects preferences."""
-    from engine.effects_v4 import MyEffectsPreset
-    my_effects = MyEffectsPreset()
-    my_effects.favorites = body.favorites
-    my_effects.rules = body.rules
-    my_effects.dislikes = set(body.dislikes)
-    my_effects.custom_assets = body.custom_assets
-    my_effects.save()
-    return {"ok": True}
-
-
-@app.get("/jobs/{job_id}/effect-feedback")
-def get_effect_feedback(job_id: str):
-    """Get effect feedback examples (user edits for learning)."""
-    from engine.effects_v4 import EffectFeedback
-    feedback = EffectFeedback()
-    return {"examples": feedback.examples}
-
-
-class EffectFeedbackBody(BaseModel):
-    segment_text: str
-    role: str
-    old_effect: str
-    new_effect: str
-
-
-@app.post("/jobs/{job_id}/effect-feedback")
-def post_effect_feedback(job_id: str, body: EffectFeedbackBody):
-    """Log an effect edit for learning."""
-    from engine.effects_v4 import EffectFeedback
-    feedback = EffectFeedback()
-    feedback.add(body.segment_text, body.role, body.old_effect, body.new_effect)
-    return {"ok": True, "total_examples": len(feedback.examples)}
+@app.get("/health")
+def health_check():
+    return {"ok": True, "service": "rafiei-ai-editor", "stage": 3}

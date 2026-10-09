@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -48,10 +49,10 @@ def file_hash(path: Path, block: int = 1 << 20) -> str:
 
 
 def transcript_key(file_digest: str, model_size: str, language: Optional[str],
-                   device: str, compute_type: str, initial_prompt: str = "") -> str:
+                   device: str, compute_type: str, initial_prompt: Optional[str] = "") -> str:
     settings = {"file_hash": file_digest, "model_size": model_size,
                 "language": language, "device": device, "compute_type": compute_type,
-                "initial_prompt": initial_prompt.strip(),
+                "initial_prompt": (initial_prompt or "").strip(),
                 "word_timestamps": True, "vad_filter": True, "beam_size": 5}
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -122,18 +123,35 @@ def effective_transcript(out_dir: Path) -> dict:
     if corrections.get("base_key") != key:
         return raw
     words = [dict(w) for w in raw["words"]]
-    for item in corrections.get("words", []):
-        idx = item["index"]
-        if 0 <= idx < len(words):
-            words[idx]["original_w"] = words[idx]["w"]
-            words[idx]["w"] = item["text"]
-            words[idx]["start"] = item.get("start", words[idx]["start"])
-            words[idx]["end"] = item.get("end", words[idx]["end"])
-            words[idx]["reviewed"] = True
+    corrections_by_index = {item["index"]: item for item in corrections.get("words", [])}
+    effective_words = []
+    for idx, word in enumerate(words):
+        item = corrections_by_index.get(idx)
+        if item and item.get("delete"):
+            continue
+        if item:
+            word["original_w"] = word["w"]
+            word["w"] = item["text"]
+            word["start"] = item.get("start", word["start"])
+            word["end"] = item.get("end", word["end"])
+            word["reviewed"] = True
+        effective_words.append(word)
+        if item and item.get("insert_after"):
+            inserted = item["insert_after"]
+            effective_words.append({
+                **word,
+                "w": inserted["text"],
+                "original_w": "",
+                "start": inserted["start"],
+                "end": inserted["end"],
+                "reviewed": True,
+                "inserted": True,
+            })
+    words = effective_words
     result = {**raw, "words": words, "correction_count": len(corrections.get("words", []))}
     result["sentences"] = [
         {**sentence, "text": " ".join(
-            words[index]["w"] for index, word in enumerate(raw["words"])
+            word["w"] for word in words
             if word["start"] >= sentence["start"] - 0.001
             and word["end"] <= sentence["end"] + 0.001
         )}
@@ -151,22 +169,44 @@ def save_corrections(out_dir: Path, base_key: str, items: list[dict]) -> dict:
     cleaned = []
     for item in items:
         idx, word = item.get("index"), item.get("text")
+        deleting = item.get("delete") is True
         if (not isinstance(idx, int) or isinstance(idx, bool) or idx in seen
-                or idx < 0 or idx >= len(raw["words"]) or not isinstance(word, str)
-                or not word.strip() or len(word) > 120):
+                or idx < 0 or idx >= len(raw["words"])
+                or (not deleting and (not isinstance(word, str) or not word.strip() or len(word) > 120))):
             raise ValueError("invalid transcript correction")
         seen.add(idx)
         original = raw["words"][idx]
+        if deleting:
+            cleaned.append({"index": idx, "delete": True})
+            continue
         start = item.get("start") if item.get("start") is not None else original["start"]
         end = item.get("end") if item.get("end") is not None else original["end"]
         if (not isinstance(start, (int, float)) or isinstance(start, bool)
                 or not isinstance(end, (int, float)) or isinstance(end, bool)
                 or start < 0 or end <= start or end > raw["duration"] + 0.5):
             raise ValueError("invalid transcript word timing")
+        insert_after = item.get("insert_after")
+        if insert_after is not None:
+            inserted_text = insert_after.get("text") if isinstance(insert_after, dict) else None
+            inserted_start = insert_after.get("start") if isinstance(insert_after, dict) else None
+            inserted_end = insert_after.get("end") if isinstance(insert_after, dict) else None
+            if (not isinstance(inserted_text, str) or not inserted_text.strip() or len(inserted_text) > 120
+                    or not isinstance(inserted_start, (int, float)) or isinstance(inserted_start, bool)
+                    or not isinstance(inserted_end, (int, float)) or isinstance(inserted_end, bool)
+                    or inserted_start < 0 or inserted_end <= inserted_start
+                    or inserted_end > raw["duration"] + 0.5):
+                raise ValueError("invalid inserted transcript word")
+            insert_after = {"text": inserted_text.strip(), "start": round(inserted_start, 3),
+                            "end": round(inserted_end, 3)}
         if (word.strip() != original["w"] or abs(start-original["start"]) > 0.001
                 or abs(end-original["end"]) > 0.001):
             cleaned.append({"index": idx, "text": word.strip(),
-                            "start": round(start, 3), "end": round(end, 3)})
+                            "start": round(start, 3), "end": round(end, 3),
+                            **({"insert_after": insert_after} if insert_after else {})})
+        elif insert_after:
+            cleaned.append({"index": idx, "text": word.strip(),
+                            "start": round(start, 3), "end": round(end, 3),
+                            "insert_after": insert_after})
     updated_starts = [word["start"] for word in raw["words"]]
     for item in cleaned:
         updated_starts[item["index"]] = item["start"]
@@ -207,7 +247,40 @@ def _transcribe_whisper(
             log.info("transcript cache hit for %s", video.name)
             return effective_transcript(out_dir)
 
-    from faster_whisper import WhisperModel
+    def empty_transcript(reason: str) -> dict:
+        from engine.probe import probe_duration
+
+        transcript = {
+            "file_hash": fhash,
+            "cache_key": key,
+            "engine": "none",
+            "model_size": model_size,
+            "requested_language": language,
+            "initial_prompt": initial_prompt,
+            "language": language or "unknown",
+            "duration": round(probe_duration(video), 3),
+            "words": [],
+            "sentences": [],
+            "fallback_reason": reason,
+        }
+        archive.parent.mkdir(exist_ok=True)
+        _archive_current(out_dir)
+        encoded = json.dumps(transcript, indent=2, ensure_ascii=False)
+        archive.write_text(encoded)
+        transcript_path.write_text(encoded)
+        log.warning("using an empty transcript for %s: %s", video.name, reason)
+        return transcript
+
+    from engine.probe import has_audio
+    if not has_audio(video):
+        return empty_transcript("source has no audio stream")
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        return empty_transcript(
+            f"faster-whisper is not installed in the API Python environment ({sys.executable})"
+        )
     log.info("loading whisper model %r (device=%s, compute=%s)", model_size, device, compute_type)
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
     log.info("model cache dir: %s", model.model_path if hasattr(model, "model_path") else "unknown")
@@ -291,7 +364,7 @@ def transcribe(
     language: Optional[str] = None,
     device: str = "cpu",
     compute_type: str = "int8",
-    initial_prompt: str = "",
+    initial_prompt: Optional[str] = "",
     hotwords: Optional[list[str]] = None,
     engine: Optional[str] = None,
     keyterms: Optional[list[str]] = None,
@@ -308,6 +381,7 @@ def transcribe(
 
     fhash = file_hash(video)
     selected_engine = choose_engine(language, engine)
+    elevenlabs_error: Optional[Exception] = None
 
     if selected_engine == "elevenlabs":
         from brain.transcribe_elevenlabs import transcribe_elevenlabs
@@ -333,19 +407,30 @@ def transcribe(
             return effective_transcript(out_dir)
         except Exception as exc:
             log.warning("ElevenLabs failed (%s), falling back to whisper", exc)
+            elevenlabs_error = exc
             selected_engine = "whisper"
 
     model_size = model_size or ("medium" if language == "fa" else _DEFAULT_MODEL)
-    initial_prompt = initial_prompt.strip()[:500]
+    initial_prompt = (initial_prompt or "").strip()[:500]
 
-    result = _transcribe_whisper(
-        video, out_dir, fhash, model_size, language,
-        device, compute_type, initial_prompt, hotwords,
-    )
+    try:
+        result = _transcribe_whisper(
+            video, out_dir, fhash, model_size, language,
+            device, compute_type, initial_prompt, hotwords,
+        )
+    except Exception as whisper_error:
+        if elevenlabs_error is not None:
+            raise RuntimeError(
+                "ElevenLabs transcription failed "
+                f"({type(elevenlabs_error).__name__}: {elevenlabs_error}); "
+                "Whisper fallback also failed "
+                f"({type(whisper_error).__name__}: {whisper_error})"
+            ) from whisper_error
+        raise
 
     cost_path = out_dir / "asr_cost.json"
     cost_path.write_text(json.dumps({
-        "engine": "whisper",
+        "engine": result.get("engine", "whisper"),
         "audio_seconds": result.get("duration", 0),
         "cost_usd": 0.0,
     }, indent=2))

@@ -131,6 +131,14 @@ def score_families_with_vision(
                 if fav_id in info.get("ids", []) and fam_name in scores_dict:
                     scores_dict[fam_name] *= 1.0 + float(weight) * 0.5
 
+        # A Rafiei style is a separate, mutually exclusive theme choice. It
+        # biases the matching family without changing Favorites or My Rules.
+        selected_style = my_effects.selected_rafiei_style
+        if selected_style:
+            for fam_name, info in EFFECT_FAMILIES_V4.items():
+                if selected_style in info.get("ids", []) and fam_name in scores_dict:
+                    scores_dict[fam_name] += 12.0
+
         # Apply dislikes (never use)
         for dislike_id in my_effects.dislikes:
             for fam_name, info in EFFECT_FAMILIES_V4.items():
@@ -147,6 +155,15 @@ def score_families_with_vision(
             for fam_name in list(scores_dict.keys()):
                 if fam_name in exc or exc in fam_name:
                     scores_dict[fam_name] = -100
+
+    # Stage 5: Apply aggregated feedback bias from style learning
+    try:
+        from brain.style_feedback import load_feedback_summary, apply_feedback_to_effect_scores
+        fb_summary = load_feedback_summary()
+        if fb_summary and fb_summary.get("total_events", 0) >= 5:
+            scores_dict = apply_feedback_to_effect_scores(scores_dict, fb_summary)
+    except Exception:
+        pass
 
     # Apply few-shot learning from recent edits
     if feedback and feedback.examples:
@@ -265,6 +282,27 @@ def select_effects_with_vision(
 
     from engine.effects_v4 import EFFECT_FAMILIES_V4 as FAMILIES
     from .effect_score import _find_emphasis_start
+
+    # A style explicitly selected on My Effects is an editing decision, not a
+    # suggestion to the scorer. Do not call vision, rotate variants, or let a
+    # critic choose a different family when this lock is present.
+    selected_style = my_effects.selected_rafiei_style if my_effects else None
+    if selected_style:
+        selected_family = next(
+            (name for name, info in FAMILIES.items() if selected_style in info.get("ids", [])),
+            "user_selected",
+        )
+        return [
+            {
+                "segment_id": seg["id"],
+                "type": selected_style,
+                "family": selected_family,
+                "reason": f"Locked by My Effects selection: {selected_style}",
+                "source": "my_effects_selection",
+                "vision": None,
+            }
+            for seg in segments
+        ]
 
     effects = []
     accent_debt = 0.0

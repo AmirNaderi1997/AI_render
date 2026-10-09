@@ -32,6 +32,47 @@ def test_cache_key_changes_with_model_and_language():
     assert first != transcript_key("video", "small", "fa", "cpu", "int8", "محصول")
 
 
+def test_cache_key_accepts_missing_initial_prompt():
+    assert transcript_key("video", "small", "fa", "cpu", "int8", None) == \
+        transcript_key("video", "small", "fa", "cpu", "int8", "")
+
+
+def test_transcribe_accepts_missing_initial_prompt(tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"test video data")
+    result = _raw("candidate", file_hash(video))
+    with patch("brain.transcribe._transcribe_whisper", return_value=result) as whisper, \
+         patch.dict("os.environ", {"ELEVENLABS_API_KEY": ""}):
+        transcribe(video, tmp_path, language="en", engine="whisper", initial_prompt=None)
+    assert whisper.call_args.args[7] == ""
+
+
+def test_missing_whisper_uses_empty_transcript_fallback(tmp_path, monkeypatch):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"test video data")
+    import sys
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+    with patch("engine.probe.has_audio", return_value=True), \
+         patch("engine.probe.probe_duration", return_value=2.0):
+        result = transcribe(video, tmp_path, language="en", engine="whisper")
+    assert result["engine"] == "none"
+    assert result["words"] == []
+    assert result["sentences"] == []
+    assert "faster-whisper is not installed" in result["fallback_reason"]
+
+
+def test_elevenlabs_and_whisper_failures_are_both_reported(tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"test video data")
+    with patch("brain.transcribe_elevenlabs.transcribe_elevenlabs",
+               side_effect=RuntimeError("ElevenLabs key rejected")), \
+         patch("brain.transcribe._transcribe_whisper",
+               side_effect=RuntimeError("faster-whisper missing")), \
+         patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test-key"}):
+        with pytest.raises(RuntimeError, match="ElevenLabs key rejected.*faster-whisper missing"):
+            transcribe(video, tmp_path, language="fa", engine="elevenlabs")
+
+
 def test_review_overlay_preserves_raw_and_sentences(tmp_path):
     raw = _raw("candidate-one", "digest")
     (tmp_path / "transcript.json").write_text(json.dumps(raw, ensure_ascii=False))
@@ -95,6 +136,27 @@ def test_transcribe_only_leaves_existing_plan_untouched(tmp_path):
         _run_generate(job, "rafiei_reel", "", "medium", "fa", False, True, "")
     assert job.generate.status == "done"
     assert plan_path.read_text() == '{"existing": true}'
+
+
+def test_empty_transcript_builds_renderable_full_source_plan_without_llm(tmp_path):
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "raw" / "clip.mp4").write_bytes(b"test clip")
+    job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
+    transcript = {
+        "file_hash": "digest", "cache_key": "candidate", "engine": "none",
+        "language": "en", "duration": 2.0, "words": [], "sentences": [],
+        "fallback_reason": "source has no audio stream",
+    }
+    (tmp_path / "transcript.json").write_text(json.dumps(transcript))
+    with patch("brain.transcribe.transcribe", return_value=transcript), \
+         patch("app.jobs.validate_plan", return_value=(object(), [])), \
+         patch("brain.silence.detect_pauses", side_effect=AssertionError("should not detect pauses")), \
+         patch("brain.planner.generate_plan", side_effect=AssertionError("should not call LLM")):
+        _run_generate(job, "rafiei_reel", "", "small", "en", False, False, "")
+    plan = json.loads((tmp_path / "plan.json").read_text())
+    assert job.generate.status == "done"
+    assert plan["segments"] == [{"id": "s1", "in": 0.0, "out": 2.0}]
+    assert plan["captions"] == []
 
 
 def test_regeneration_passes_reviewed_words_to_planner(tmp_path):

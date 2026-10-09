@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -271,16 +273,10 @@ def _apply_merge_split(
             return None
         start, end = orig["start"], orig["end"]
         mid = start + (end - start) * len(parts[0]) / total_chars
-        # Replace word at idx with first part; second part goes to idx+1 if that word exists
-        items_out = [{"index": idx, "text": parts[0], "start": start, "end": round(mid, 3)}]
-        if idx + 1 < len(words):
-            items_out.append({
-                "index": idx + 1,
-                "text": parts[1],
-                "start": round(mid, 3),
-                "end": round(end, 3),
-            })
-        return items_out
+        return [{
+            "index": idx, "text": parts[0], "start": start, "end": round(mid, 3),
+            "insert_after": {"text": parts[1], "start": round(mid, 3), "end": round(end, 3)},
+        }]
 
     if correction_type == "merge":
         # Two adjacent words merged: union of time ranges
@@ -292,9 +288,7 @@ def _apply_merge_split(
         merged_end = orig_b["end"]
         return [
             {"index": idx, "text": new_word, "start": merged_start, "end": round(merged_end, 3)},
-            # Mark the next word as empty (will be removed by keeping the merged text)
-            # We can't delete words, so we write the second word as empty-ish filler
-            {"index": idx + 1, "text": orig_b["w"]},  # keep original (merge shown in first)
+            {"index": idx + 1, "delete": True},
         ]
 
     # replace (default)
@@ -312,6 +306,7 @@ def _call_correction_llm(
             kwargs = {"max_tokens": 2048, "temperature": 0.0}
             if model:
                 kwargs["model"] = model
+            kwargs["timeout_seconds"] = _correction_timeout_seconds()
             raw, usage = chat_json(system, user, **kwargs)
             total_usage.input_tokens += usage.input_tokens
             total_usage.output_tokens += usage.output_tokens
@@ -326,12 +321,43 @@ def _call_correction_llm(
             return raw, total_usage
         except Exception as exc:
             total_usage.model = model or ""
+            if _is_timeout_error(exc):
+                log.warning("auto_correct: LLM call timed out; continuing without optional corrections")
+                return None, total_usage
             if attempt < max_retries:
                 log.warning("auto_correct: LLM call failed (attempt %d/%d): %s — retrying…", attempt, max_retries, exc)
                 continue
             log.error("auto_correct: LLM call failed after %d attempts: %s", max_retries, exc)
             return None, total_usage
     return None, total_usage
+
+
+def _correction_timeout_seconds() -> float:
+    """Keep optional transcript correction bounded independently from planning."""
+    default_timeout = 300.0
+    try:
+        raw = os.getenv("AI_CORRECTION_TIMEOUT_SECONDS")
+        if raw is None:
+            raw = os.getenv("AI_PROVIDER_TIMEOUT_SECONDS", str(default_timeout))
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        return default_timeout
+    if not math.isfinite(timeout) or timeout <= 0:
+        return default_timeout
+    return min(timeout, 600.0)
+
+
+def _is_timeout_error(error: BaseException) -> bool:
+    """Recognize built-in and common SDK timeout exceptions without SDK imports."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        name = type(current).__name__.lower()
+        if isinstance(current, TimeoutError) or "timeout" in name or "timedout" in name:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _auto_correct_chunked(

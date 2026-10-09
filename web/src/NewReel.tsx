@@ -1,6 +1,10 @@
 import React from "react";
-import { useNavigate } from "react-router-dom";
-import { api } from "./api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, FontEntry, LibraryAsset, StyleProfile } from "./api";
+import { FontLibrary } from "./FontLibrary";
+import { StylePicker } from "./StyleLibrary";
+import { AuthenticatedMedia } from "./AuthenticatedMedia";
+import { friendlyError } from "./ui";
 
 function fmtSize(n: number) {
   return n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : (n / 1e6).toFixed(1) + " MB";
@@ -8,11 +12,27 @@ function fmtSize(n: number) {
 
 export default function NewReel() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [video, setVideo] = React.useState<File | null>(null);
+  const [musicFile, setMusicFile] = React.useState<File | null>(null);
+  const [libraryTracks, setLibraryTracks] = React.useState<LibraryAsset[]>([]);
+  const [selectedLibraryTrack, setSelectedLibraryTrack] = React.useState("");
+  const [playingTrack, setPlayingTrack] = React.useState<string | null>(null);
+  const musicAudioRef = React.useRef<HTMLAudioElement>(null);
   const [planFile, setPlanFile] = React.useState<File | null>(null);
   const [planText, setPlanText] = React.useState("");
   const [style, setStyle] = React.useState("rafiei_reel");
+  const [styleProfile, setStyleProfile] = React.useState<StyleProfile | null>(null);
+  const [fonts, setFonts] = React.useState<string[]>([]);
+  const [optionsLoading, setOptionsLoading] = React.useState(true);
+  const [optionsError, setOptionsError] = React.useState("");
+  const [captionFont, setCaptionFont] = React.useState("");
+  const [captionFontId, setCaptionFontId] = React.useState("");
   const [instruction, setInstruction] = React.useState("");
+  const [outputKind, setOutputKind] = React.useState<"reel" | "story" | "post">("reel");
+  const [transitionStyle, setTransitionStyle] =
+    React.useState<"auto" | "none" | "crossfade" | "directional">("auto");
+  const [transitionRequest, setTransitionRequest] = React.useState("");
   const [language, setLanguage] = React.useState("fa");
   const [whisperModel, setWhisperModel] = React.useState("medium");
   const [asrEngine, setAsrEngine] = React.useState("auto");
@@ -26,6 +46,27 @@ export default function NewReel() {
 
   const inputRef = React.useRef<HTMLInputElement>(null);
 
+  const refreshFonts = React.useCallback(() => {
+    api.listFonts().then(setFonts).catch(e => setOptionsError(friendlyError(e, "load available fonts")));
+  }, []);
+  React.useEffect(() => { refreshFonts(); }, [refreshFonts]);
+
+  React.useEffect(() => {
+    api.getLibrary().then(lib => {
+      setLibraryTracks(lib.assets.filter(a => a.category === "music"));
+    }).catch(e => setOptionsError(friendlyError(e, "load saved music"))).finally(() => setOptionsLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    const styleId = searchParams.get("style_id");
+    const version = Number(searchParams.get("style_version"));
+    if (!styleId || !Number.isInteger(version)) return;
+    api.getStyleLibrary().then(library => {
+      const selected = library.profiles.find(p => p.style_id === styleId && p.version === version);
+      if (selected) setStyleProfile(selected);
+    }).catch(e => setOptionsError(friendlyError(e, "load the selected style")));
+  }, [searchParams]);
+
   React.useEffect(() => {
     const stop = (e: DragEvent) => e.preventDefault();
     window.addEventListener("dragover", stop);
@@ -35,17 +76,22 @@ export default function NewReel() {
 
   React.useEffect(() => {
     if (!generating || !jobId) return;
+    let inFlight = false;
     const tick = () =>
-      api.generateStatus(jobId).then(s => {
+      {
+        if (inFlight) return;
+        inFlight = true;
+        api.generateStatus(jobId).then(s => {
         setGenStatus(s);
         if (s.status === "done") {
           setGenerating(false);
           nav(`/jobs/${jobId}`);
         } else if (s.status === "error") {
           setGenerating(false);
-          setErr("Plan generation failed: " + s.message);
+          setErr(friendlyError(s.message, "generate the edit plan"));
         }
-      }).catch(() => {});
+        }).catch(e => setErr(friendlyError(e, "check plan progress"))).finally(() => { inFlight = false; });
+      };
     tick();
     const iv = setInterval(tick, 1500);
     return () => clearInterval(iv);
@@ -59,6 +105,19 @@ export default function NewReel() {
     setErr(null); setVideo(f);
   }
 
+  async function uploadMusicToJob(jobId: string) {
+    if (musicFile) {
+      await api.uploadMusic(jobId, musicFile);
+    } else if (selectedLibraryTrack) {
+      const mediaUrl = await api.authenticatedObjectUrl(api.libraryPreviewUrl("music", selectedLibraryTrack));
+      let blob: Blob;
+      try { blob = await (await fetch(mediaUrl)).blob(); }
+      finally { URL.revokeObjectURL(mediaUrl); }
+      const file = new File([blob], selectedLibraryTrack, { type: blob.type });
+      await api.uploadMusic(jobId, file);
+    }
+  }
+
   async function onCreate() {
     if (!video) { setErr("Select a raw video first"); return; }
     setBusy(true); setErr(null);
@@ -67,9 +126,10 @@ export default function NewReel() {
       const { job, errors } = await api.createJob(video, plan);
       if (errors.length) setErr("Plan warnings: " + errors.join("; "));
       setJobId(job.id);
+      await uploadMusicToJob(job.id);
       nav(`/jobs/${job.id}`);
     } catch (e: any) {
-      setErr("Upload failed: " + String(e.message || e));
+      setErr(friendlyError(e, "upload the video and plan"));
     } finally { setBusy(false); }
   }
 
@@ -79,27 +139,43 @@ export default function NewReel() {
     try {
       const { job } = await api.createJob(video);
       setJobId(job.id);
+      await uploadMusicToJob(job.id);
       await api.generatePlan(job.id, {
         style, instruction: instruction.trim(), whisper_model: whisperModel,
         language: language === "auto" ? null : language,
         transcription_hint: transcriptionHint.trim(),
         asr_engine: asrEngine === "auto" ? undefined : asrEngine,
+        caption_font: captionFont || undefined,
+        caption_font_id: captionFontId || undefined,
+        style_id: styleProfile?.style_id,
+        style_version: styleProfile?.version,
+        output_kind: outputKind,
+        transition_style: transitionStyle,
+        transition_request: transitionRequest.trim(),
       });
       setGenerating(true);
     } catch (e: any) {
-      setErr("Failed: " + String(e.message || e));
+      setErr(friendlyError(e, "start plan generation"));
     } finally { setBusy(false); }
   }
 
   return (
     <div>
       <h1>New Reel</h1>
+      {optionsLoading && <p className="muted" role="status">Loading fonts and saved music…</p>}
+      {optionsError && <p className="errors" role="alert">{optionsError}</p>}
 
+      {/* Step 1 - Video */}
       <div className="card">
-        <h2>1. Raw video</h2>
+        <div className="section-header">
+          <h2>Raw Video</h2>
+          <span className="muted">Step 1</span>
+        </div>
         <label
           htmlFor="vid"
           className={`dropzone ${over ? "over" : ""}`}
+          role="button" tabIndex={0} aria-label={video ? `Replace video ${video.name}` : "Choose a raw video"}
+          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputRef.current?.click(); } }}
           style={{ display: "block", cursor: "pointer" }}
           onDragEnter={e => { e.preventDefault(); setOver(true); }}
           onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setOver(true); }}
@@ -109,69 +185,200 @@ export default function NewReel() {
             pick(e.dataTransfer.files[0]);
           }}
         >
-          {video ? <>Selected: <b>{video.name}</b> ({fmtSize(video.size)})</> :
-            "Drag & drop a video here, or click to browse"}
+          {video ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>{video.name}</div>
+              <div style={{ color: "var(--text-secondary)" }}>{fmtSize(video.size)}</div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}>&#128249;</div>
+              <div style={{ fontWeight: 500 }}>Drag & drop a video here, or click to browse</div>
+              <div className="muted" style={{ marginTop: 4 }}>Supports .mp4 and .mov files</div>
+            </div>
+          )}
         </label>
-        <input id="vid" ref={inputRef} type="file"
+        <input id="vid" ref={inputRef} type="file" tabIndex={-1}
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, overflow: "hidden" }}
           onChange={e => { pick(e.target.files?.[0]); e.target.value = ""; }} />
       </div>
 
+      {/* Step 2 - Style */}
       <div className="card">
-        <h2>2. Style</h2>
-        <select value={style} onChange={e => setStyle(e.target.value)}>
-          <option value="rafiei_reel">Rafiei Reel Style</option>
-        </select>
-        <div className="row" style={{ marginTop: 12, flexWrap: "wrap" }}>
-          <label>Speech language: <select value={language} onChange={e => setLanguage(e.target.value)}>
-            <option value="fa">Persian</option><option value="en">English</option>
-            <option value="auto">Auto detect</option>
-          </select></label>
-          <label>Transcription: <select value={asrEngine} onChange={e => setAsrEngine(e.target.value)}>
-            <option value="auto">Auto (best available)</option>
-            <option value="elevenlabs">ElevenLabs (best Persian)</option>
-            <option value="whisper">Whisper (offline)</option>
-          </select></label>
-          {asrEngine !== "elevenlabs" && <label>Whisper model: <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
-            <option value="medium">medium (recommended for Persian)</option>
-            <option value="small">small (faster)</option>
-            <option value="large-v3">large-v3 (slower)</option>
-          </select></label>}
+        <div className="section-header">
+          <h2>Style & Speech</h2>
+          <span className="muted">Step 2</span>
         </div>
-        <label style={{ display: "block", marginTop: 12 }}>Speech terms or names (optional)
-          <input type="text" value={transcriptionHint} onChange={e => setTranscriptionHint(e.target.value)}
-            placeholder="e.g. product names, brand names, technical terms"
-            style={{ width: "100%" }} />
-        </label>
+        <div className="row" style={{ gap: 16, marginBottom: 12 }}>
+          <label>Preset
+            <select value={style} onChange={e => setStyle(e.target.value)}>
+              <option value="rafiei_reel">Rafiei Reel Style</option>
+            </select>
+          </label>
+        </div>
+        <StylePicker value={styleProfile} onChange={setStyleProfile} />
+        <p className="muted" style={{ marginTop: 8 }}>Manage approved visual styles and imported fonts in <a href="/style-library">Styles & Fonts Library</a>.</p>
+
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+          <label style={{ display: "block", marginBottom: 12 }}>Caption font
+            <select value={captionFontId ? "" : captionFont}
+              onChange={e => { setCaptionFont(e.target.value); setCaptionFontId(""); }}>
+              <option value="">Style default</option>
+              {fonts.map(font => <option key={font} value={font}>{font}</option>)}
+            </select>
+          </label>
+          <div className="row" style={{ gap: 16, marginBottom: 12 }}>
+            <label>Speech language
+              <select value={language} onChange={e => setLanguage(e.target.value)}>
+                <option value="fa">Persian</option><option value="en">English</option>
+                <option value="auto">Auto detect</option>
+              </select>
+            </label>
+            <label>ASR engine
+              <select value={asrEngine} onChange={e => setAsrEngine(e.target.value)}>
+                <option value="auto">Auto (best available)</option>
+                <option value="elevenlabs">ElevenLabs (best Persian)</option>
+                <option value="whisper">Whisper (offline)</option>
+              </select>
+            </label>
+            {asrEngine !== "elevenlabs" && <label>Whisper model
+              <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
+                <option value="medium">medium (recommended)</option>
+                <option value="small">small (faster)</option>
+                <option value="large-v3">large-v3 (slower)</option>
+              </select>
+            </label>}
+          </div>
+          <label style={{ display: "block" }}>Speech terms or names
+            <input type="text" value={transcriptionHint} onChange={e => setTranscriptionHint(e.target.value)}
+              placeholder="e.g. product names, brand names, technical terms"
+              style={{ width: "100%", marginTop: 4 }} />
+          </label>
+        </div>
+
+        <FontLibrary selectedId={captionFontId || undefined} onLibraryChange={refreshFonts}
+          onSelect={(font: FontEntry | null) => {
+            setCaptionFontId(font?.id || ""); setCaptionFont(font?.family || "");
+          }} />
       </div>
 
+      {/* Step 3 - Instruction */}
       <div className="card">
-        <h2>3. Instruction (optional)</h2>
+        <div className="section-header">
+          <h2>Instruction</h2>
+          <span className="muted">Step 3 (optional)</span>
+        </div>
         <input
+          aria-label="Additional editing instruction"
           type="text"
-          placeholder="e.g. Make the CTA stronger, add more punch-ins…"
+          placeholder="e.g. Make the CTA stronger, add more punch-ins..."
           value={instruction}
           onChange={e => setInstruction(e.target.value)}
           style={{ width: "100%" }}
         />
       </div>
 
+      {/* Transitions */}
       <div className="card">
-        <h2>4. Generate or upload plan</h2>
-        <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={onGenerate} disabled={busy || generating || !video}
-            style={{ background: "#2563eb" }}>
-            {generating ? "Generating…" : "Generate Edit Plan"}
+        <h2>Transitions</h2>
+        <div className="row" style={{ gap: 16, marginBottom: 8 }}>
+          <label>Format
+            <select value={outputKind} onChange={e => setOutputKind(e.target.value as any)}>
+              <option value="reel">Reel</option>
+              <option value="story">Story</option>
+              <option value="post">Post</option>
+            </select>
+          </label>
+          <label>Style
+            <select value={transitionStyle} onChange={e => setTransitionStyle(e.target.value as any)}>
+              <option value="auto">Auto (AI decides)</option>
+              <option value="none">None (hard cuts)</option>
+              <option value="crossfade">Crossfade</option>
+              <option value="directional">Directional</option>
+              <option value="zoom">Boundary zoom</option>
+            </select>
+          </label>
+        </div>
+        <input type="text" aria-label="Transition note" placeholder="Optional note, e.g. only transition at topic changes"
+          value={transitionRequest} onChange={e => setTransitionRequest(e.target.value)}
+          style={{ width: "100%" }} />
+      </div>
+
+      {/* Music */}
+      <div className="card">
+        <div className="section-header">
+          <h2>Music (optional)</h2>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label>Upload custom music
+            <input type="file" accept="audio/mp3,audio/wav,audio/aac,audio/m4a,audio/*"
+              onChange={e => { const f = e.target.files?.[0]; if (f) { setMusicFile(f); setSelectedLibraryTrack(""); } }} />
+          </label>
+          {musicFile && <span className="muted" style={{ marginLeft: 8 }}>{musicFile.name} ({fmtSize(musicFile.size)})</span>}
+        </div>
+        {libraryTracks.length > 0 && (
+          <div>
+            <label>Or pick from library
+              <select value={selectedLibraryTrack}
+                onChange={e => { setSelectedLibraryTrack(e.target.value); if (e.target.value) setMusicFile(null); }}>
+                <option value="">None</option>
+                {libraryTracks.map(t => (
+                  <option key={t.filename} value={t.filename}>
+                    {t.filename} {t.mood ? `(${t.mood})` : ""} {t.duration_sec ? `${t.duration_sec.toFixed(0)}s` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedLibraryTrack && (
+              <button className="secondary" style={{ marginLeft: 8, fontSize: 12, padding: "4px 10px" }}
+                onClick={() => {
+                  if (playingTrack === selectedLibraryTrack && musicAudioRef.current) {
+                    musicAudioRef.current.pause(); setPlayingTrack(null);
+                  } else {
+                    setPlayingTrack(selectedLibraryTrack);
+                  }
+                }}>
+                {playingTrack === selectedLibraryTrack ? "Stop" : "Preview"}
+              </button>
+            )}
+            {playingTrack && (
+              <AuthenticatedMedia as="audio" ref={musicAudioRef} src={api.libraryPreviewUrl("music", playingTrack)}
+                autoPlay onEnded={() => setPlayingTrack(null)} style={{ display: "none" }} />
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Step 4 - Generate */}
+      <div className="card">
+        <div className="section-header">
+          <h2>Generate or Upload Plan</h2>
+          <span className="muted">Step 4</span>
+        </div>
+        <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 16 }}>
+          <button onClick={onGenerate} disabled={busy || generating || !video}>
+            {generating ? "Generating..." : "Generate Edit Plan"}
           </button>
-          <span className="muted">— or upload a manual plan.json:</span>
+          <span className="muted">or upload a manual plan.json</span>
         </div>
 
         {generating && genStatus && (
-          <div style={{ marginTop: 12, padding: "8px 12px", background: "#1e293b", borderRadius: 6 }}>
-            <div>Stage: <b>{genStatus.stage || "starting"}</b></div>
+          <div style={{
+            padding: "14px 18px",
+            background: "var(--accent-soft)",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid rgba(99,102,241,0.15)",
+            marginBottom: 16
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span className="generating-pulse" style={{
+                width: 8, height: 8, borderRadius: "50%", background: "var(--accent)"
+              }} />
+              <span style={{ fontWeight: 600 }}>Stage: {genStatus.stage || "starting"}</span>
+            </div>
             <div className="muted">{genStatus.message}</div>
             {genStatus.asr_engine && (
-              <div className="muted" style={{ marginTop: 4 }}>
+              <div className="muted" style={{ marginTop: 6 }}>
                 ASR: {genStatus.asr_engine}
                 {genStatus.asr_audio_seconds > 0 && ` · ${genStatus.asr_audio_seconds.toFixed(1)}s audio`}
                 {genStatus.asr_cost_usd > 0 && ` · $${genStatus.asr_cost_usd.toFixed(4)}`}
@@ -180,18 +387,21 @@ export default function NewReel() {
           </div>
         )}
 
-        <div style={{ marginTop: 12 }}>
-          <input type="file" accept="application/json" onChange={e => setPlanFile(e.target.files?.[0] || null)} />
-          <textarea rows={6} placeholder='{"canvas": ..., "segments": [...], ...}'
+        <div>
+          <input type="file" aria-label="Upload a plan JSON file" accept="application/json" onChange={e => setPlanFile(e.target.files?.[0] || null)} />
+          <textarea rows={6} aria-label="Paste edit plan JSON" placeholder='{"canvas": ..., "segments": [...], ...}'
             value={planText} onChange={e => setPlanText(e.target.value)}
-            style={{ marginTop: 8 }} />
+            style={{ marginTop: 10 }} />
         </div>
       </div>
 
-      {err && <div className="errors">{err}</div>}
-      <button onClick={onCreate} disabled={busy || !video} className="secondary">
-        {busy ? "Creating…" : "Create (with manual plan)"}
-      </button>
+      {err && <div className="errors" role="alert">{err}</div>}
+
+      <div className="action-bar">
+        <button onClick={onCreate} disabled={busy || !video} className="secondary">
+          {busy ? "Creating..." : "Create (with manual plan)"}
+        </button>
+      </div>
     </div>
   );
 }

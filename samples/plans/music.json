@@ -1,0 +1,35 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "source": "../media/raw.mp4",
+  "segments": [
+    {
+      "id": "s1",
+      "in": 0.0,
+      "out": 4.0
+    }
+  ],
+  "captions": [],
+  "broll": [],
+  "sfx": [],
+  "music": {
+    "file": "../media/music.wav",
+    "volume_db": -14,
+    "duck": [
+      {
+        "start": 0.0,
+        "end": 2.0,
+        "volume_db": -24
+      }
+    ]
+  },
+  "export": {
+    "file": "out_music.mp4",
+    "crf": 23
+  }
+}

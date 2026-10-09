@@ -1,0 +1,18 @@
+---
+description: Commit all repository changes after each completed Codex run
+alwaysApply: true
+---
+
+# Commit after every completed run
+
+When a Codex task in this repository finishes, immediately create a Git
+checkpoint before ending the response:
+
+```sh
+git add -A
+git commit -m "<concise description of what was fixed>"
+```
+
+Use a concise, accurate commit message describing the work completed in that
+run. If no files changed, state that no commit was needed. Do not delay this
+checkpoint until a later prompt.

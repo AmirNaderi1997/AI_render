@@ -39,7 +39,21 @@ claim this is a complete specification for all Kdenlive versions.
 ## Captions and limits
 
 The upstream fixtures do not establish a reliable XML representation for a
-Kdenlive-editable subtitle track, so this exporter does not add one. The
-caption ASS/SRT sidecar files remain beside the project for manual import.
-The render MLT still burns captions into its MP4. Importing the sidecars into
-Kdenlive and matching the styled output remains unverified.
+Kdenlive-editable subtitle track, and no subtitle lane has been written into
+`project.kdenlive`. The exporter adds none (an MLT `subtitle` filter has no
+Kdenlive effect ID and triggers a Clip Problems dialog). The render MLT still
+burns captions into the MP4.
+
+`python -m engine build` writes `captions.ass` plus one SRT per style
+(`captions.normal.srt`, `captions.emphasis.srt`, `captions.cta.srt`) next to
+`project.mlt`. To get captions into Kdenlive by hand:
+
+1. Open the generated `project.kdenlive`.
+2. Menu **Project → Subtitles → Import Subtitle File**.
+3. Pick `captions.ass` (keeps styles) or one of the `.srt` files (text and timing only).
+4. A subtitle track appears above the video tracks. Edit text and timing there.
+
+Verification status: these steps follow Kdenlive's documented subtitle
+workflow. They were **not** run here: Kdenlive 26.08.1 is installed, but the
+automation sandbox cannot launch GUI apps. Whether the ASS styling matches the
+burned-in output is also unverified.

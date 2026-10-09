@@ -434,12 +434,17 @@ def test_measure_segment_signals_speech_rate_only(tmp_path):
 
 # ── glossary API save ──────────────────────────────────────────────────────────
 
-def test_accept_correction_saves_to_glossary_via_api(tmp_path):
+def test_accept_correction_saves_to_glossary_via_api(tmp_path, monkeypatch):
     """Accepting a correction through the FastAPI endpoint saves to glossary."""
     from fastapi.testclient import TestClient
     import json
 
     from app.main import app
+    from app import auth
+    monkeypatch.setattr(auth, "get_current_user_from_token", lambda _token: auth.User(
+        id="test-user", email="corrections-test@example.com", name="Correction Test",
+        password_hash="", created_at=0,
+    ))
     client = TestClient(app)
 
     # Prepare a minimal job directory
@@ -462,6 +467,7 @@ def test_accept_correction_saves_to_glossary_via_api(tmp_path):
 
     resp = client.post(
         f"/jobs/{job.id}/corrections/accept",
+        headers={"Authorization": "Bearer web-app-test-token"},
         json={
             "base_key": "testkey",
             "index": 0,

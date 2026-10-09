@@ -1,0 +1,21 @@
+.venv/
+venv/
+node_modules/
+.git/
+jobs/
+__pycache__/
+*.pyc
+.env
+/certs/
+.jwt_secret
+backups/
+.DS_Store
+Claude outputs/
+dist/
+*.egg-info/
+.pytest_cache/
+.FsSyncLocks/
+.claude/
+proof/
+samples/media/
+instagram_story_choices*.zip

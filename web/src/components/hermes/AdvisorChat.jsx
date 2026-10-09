@@ -1,0 +1,3 @@
+export default function AdvisorChat({ title = 'Advisor notes', entries = [] }) {
+  return <section className="hm-chat hm-panel"><div className="hm-section-title"><h3>{title}</h3><span>Hermes AI</span></div><div className="hm-chat-messages">{entries.length ? entries.map((entry, index) => <div className={`hm-chat-bubble ${entry.role === 'user' ? 'user' : 'advisor'}`} key={index}>{entry.text}</div>) : <p className="hm-muted">Choose an advisor tool above to see its response here.</p>}</div><p className="hm-tiny">Advisor suggestions are generated on demand. Review them before publishing.</p></section>;
+}

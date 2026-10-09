@@ -7,8 +7,8 @@ Run Claude Code from the project folder: `cd ~/Documents/AI_render && claude`, t
 You are building Stage 1 of "Rafiei AI Editor", a local AI video editor for vertical reels.
 The project folder is `~/Documents/AI_render` (work only inside it). Read these 5 files first:
 - `~/Documents/AI_render/plan.md`
-- `~/Documents/AI_render/skills.md`
-- `~/Documents/AI_render/stages.md`
+- `~/Documents/AI_render/docs/skills.md`
+- `~/Documents/AI_render/docs/stages.md`
 - `~/Documents/AI_render/proof/build_mlt.py`
 - `~/Documents/AI_render/proof/plan.json`
 

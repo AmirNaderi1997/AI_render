@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import subprocess
 import tempfile
@@ -36,7 +37,10 @@ log = logging.getLogger(__name__)
 
 
 def _load_preset(name: str = "rafiei_reel") -> dict:
-    p = PROJECT_ROOT / "presets" / f"{name}.yaml"
+    preset_dir = (PROJECT_ROOT / "presets").resolve()
+    p = (preset_dir / f"{name}.yaml").resolve()
+    if p.parent != preset_dir or Path(name).name != name:
+        raise ValueError(f"invalid style preset name: {name!r}")
     return yaml.safe_load(p.read_text())
 
 
@@ -88,7 +92,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 
 ## Edit Plan JSON Schema
 {{
-  "version": "0.2",
+  "version": "0.3",
   "style": "rafiei_reel",
   "canvas": {{"width": 1080, "height": 1920, "fps": 30}},
   "source": "<relative path to raw video>",
@@ -98,6 +102,12 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
   ],
   "visual_effects": [
     {{"segment_id": "s1", "type": "steady__neutral"}}
+  ],
+  "transitions": [
+    {{"from_segment_id": "s1", "to_segment_id": "s2", "type": "hard_cut",
+      "duration_frames": 0, "direction": "left", "intensity": 1.0,
+      "zoom_mode": "zoom_in", "zoom_scale": 1.15,
+      "source": "default", "locked": false}}
   ],
   "captions": [
     {{"start": <output_timeline_sec>, "end": <output_timeline_sec>,
@@ -137,6 +147,12 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 - Segments use SOURCE timeline times (in/out refer to the raw video)
 - Captions and B-roll use OUTPUT timeline times (after cuts/removals)
 - The output timeline is the concatenation of kept segments in order
+- Include one transition item for every adjacent segment pair. Use hard_cut
+  with duration_frames 0 unless shot context clearly justifies a restrained
+  crossfade, directional transition, or zoom. Use zoom only when the user's
+  request or shot context supports it, and keep zoom_scale between 1.02 and 1.5.
+  Rendered transitions overlap adjacent
+  clips and shorten the output by duration_frames / canvas.fps.
 
 ## Critical timing rules
 - segment.in and segment.out are in SOURCE video time
@@ -145,7 +161,8 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
   output_time = sum(duration of all preceding segments) + (word_source_time - segment.in)
 - Captions must align with the spoken words' output times
 - Captions should quote kept speech faithfully. Never invent or change a claim to make it read better. If the transcript is uncertain, keep the uncertainty visible for review.
-- The total output duration = sum of all segment durations
+- The total output duration in frames = sum(round(segment duration * fps))
+  minus the duration_frames of every rendered transition
 - All captions must end before the total output duration
 - All broll.at + broll.duration must be <= total output duration
 - All sfx.at must be <= total output duration"""
@@ -159,6 +176,9 @@ def _build_user_prompt(
     music_file: Optional[str],
     sfx_file: Optional[str],
     instruction: str = "",
+    output_kind: str = "reel",
+    transition_request: str = "",
+    transition_style: str = "auto",
 ) -> str:
     words_text = json.dumps(transcript["words"][:500], ensure_ascii=False)
     sentences_text = json.dumps(transcript["sentences"], ensure_ascii=False)
@@ -171,7 +191,16 @@ def _build_user_prompt(
         f"\n## Sentences\n{sentences_text}",
         f"\n## Keep ranges (source time)\n{json.dumps(keep_ranges)}",
         f"\n## Remove ranges (source time)\n{json.dumps(remove_ranges)}",
+        f"\n## Requested output kind\n{output_kind}",
     ]
+
+    parts.append(
+        f"\n## Transition policy\nFormat: {output_kind}. "
+        f"{TRANSITION_FORMAT_GUIDE.get(output_kind, TRANSITION_FORMAT_GUIDE['reel'])}\n"
+        f"Selected transition style: {transition_style}."
+    )
+    if transition_request:
+        parts.append(f"\n## User transition request\n{transition_request}")
 
     if music_file:
         parts.append(f"\n## Available assets\nMusic: {music_file}")
@@ -222,9 +251,184 @@ def output_to_source_time(
     return None
 
 
+TRANSITION_STYLES = ("auto", "none", "crossfade", "directional", "zoom")
+TRANSITION_FORMAT_CAPS = {"post": 8, "story": 10, "reel": 12}
+TRANSITION_FORMAT_GUIDE = {
+    "reel": "Fast-paced; short crossfades, directional moves, or subtle boundary zooms at energy shifts are fine.",
+    "story": "Short and punchy; use transitions sparingly and keep them brief.",
+    "post": "Clean and restrained; prefer hard cuts or very short crossfades.",
+}
+
+
+def _suggest_transitions(
+    plan_data: dict,
+    analyses: list[dict],
+    locked_transitions: Optional[list[dict]] = None,
+    output_kind: str = "reel",
+    transition_request: str = "",
+    transition_style: str = "auto",
+) -> None:
+    """Create one conservative, typed item for each adjacent boundary."""
+    segments = plan_data.get("segments") or []
+    if len(segments) < 2:
+        plan_data["transitions"] = []
+        return
+    fps = int((plan_data.get("canvas") or {}).get("fps", 30))
+    analysis = {item.get("segment_id"): item for item in analyses}
+    locked = {
+        (item.get("from_segment_id"), item.get("to_segment_id")): item
+        for item in (locked_transitions or [])
+        if item.get("locked")
+    }
+    model_choices = {
+        (item.get("from_segment_id"), item.get("to_segment_id")): item
+        for item in (plan_data.get("transitions") or [])
+        if item.get("type") in {"hard_cut", "crossfade", "directional", "zoom"}
+    }
+    suggestions = []
+    review = []
+    for index, (outgoing, incoming) in enumerate(zip(segments, segments[1:])):
+        pair = (outgoing["id"], incoming["id"])
+        if pair in locked:
+            item = dict(locked[pair])
+            item["source"] = "manual"
+            item["locked"] = True
+            suggestions.append(item)
+            review.append({"boundary_index": index, "source": "manual", "reason": "locked manual choice"})
+            continue
+        left = analysis.get(outgoing["id"], {})
+        right = analysis.get(incoming["id"], {})
+        left_energy = int(left.get("energy", 2) or 2)
+        right_energy = int(right.get("energy", 2) or 2)
+        segment_frames = [round((seg["out"] - seg["in"]) * fps) for seg in (outgoing, incoming)]
+        max_overlap = max(0, min(30, min(segment_frames) // 3))
+        item = {"from_segment_id": pair[0], "to_segment_id": pair[1],
+                "type": "hard_cut", "duration_frames": 0, "direction": "left",
+                "intensity": 1.0, "source": "default", "locked": False}
+        reason = "quiet hard cut preserves speech and framing"
+        model_choice = model_choices.get(pair)
+        if transition_style == "none":
+            reason = "user selected no transitions (hard cuts only)"
+        elif transition_style in ("crossfade", "directional", "zoom"):
+            if max_overlap >= 2:
+                frames = max(2, min(6, max_overlap,
+                                    TRANSITION_FORMAT_CAPS.get(output_kind, 10)))
+                item.update(type=transition_style, duration_frames=frames,
+                            direction=(model_choice or {}).get("direction", "left"),
+                            intensity=0.75, zoom_mode=(model_choice or {}).get("zoom_mode", "zoom_in"),
+                            zoom_scale=(model_choice or {}).get("zoom_scale", 1.12), source="planner")
+                reason = f"user selected {transition_style} transitions for {output_kind}"
+            else:
+                reason = "segment too short for the selected transition; hard cut"
+        elif model_choice:
+            requested_type = model_choice.get("type", "hard_cut")
+            requested_frames = int(model_choice.get("duration_frames", 0) or 0)
+            if requested_type == "hard_cut":
+                requested_frames = 0
+            elif max_overlap >= 2:
+                format_cap = TRANSITION_FORMAT_CAPS.get(output_kind, 10)
+                requested_frames = max(2, min(requested_frames or 6, max_overlap, format_cap))
+            else:
+                requested_type, requested_frames = "hard_cut", 0
+            item.update(type=requested_type, duration_frames=requested_frames,
+                        direction=model_choice.get("direction", "left"),
+                        intensity=max(0.5, min(1.0, float(model_choice.get("intensity", 1.0)))),
+                        zoom_mode=model_choice.get("zoom_mode", "zoom_in"),
+                        zoom_scale=max(1.02, min(1.5, float(model_choice.get("zoom_scale", 1.15)))),
+                        source="planner")
+            reason = f"AI selected for {output_kind} shot context"
+            if transition_request:
+                reason += "; considered the user's transition request"
+        elif max_overlap >= 6 and bool(right.get("is_turning_point")) and right_energy >= 4:
+            item.update(type="directional", duration_frames=min(8, max_overlap),
+                        direction="left", intensity=0.75, source="planner")
+            reason = "directional transition marks a high-energy turning point"
+        elif max_overlap >= 6 and left_energy <= 2 and right_energy <= 2 \
+                and right.get("role") in {"reflection", "conclusion", "emotion"}:
+            item.update(type="crossfade", duration_frames=min(10, max_overlap), source="planner")
+            reason = "short crossfade joins two low-energy related shots"
+        suggestions.append(item)
+        review.append({"boundary_index": index, "source": item["source"], "reason": reason})
+    plan_data["transitions"] = suggestions
+    plan_data["transition_analysis"] = review
+    plan_data["transition_context"] = {
+        "output_kind": output_kind,
+        "request": transition_request,
+        "style": transition_style,
+        "supported_types": ["hard_cut", "crossfade", "directional", "zoom"],
+    }
+    plan_data["version"] = "0.3"
+
+
+def _retime_for_transition_overlaps(plan_data: dict) -> None:
+    """Map model-authored concatenated output times onto the overlap timeline."""
+    transitions = {(item["from_segment_id"], item["to_segment_id"]): int(item["duration_frames"])
+                   for item in plan_data.get("transitions", [])}
+    if not any(transitions.values()):
+        return
+    segments = plan_data.get("segments") or []
+    fps = int((plan_data.get("canvas") or {}).get("fps", 30))
+    legacy_starts, output_starts = [], []
+    legacy_cursor = output_cursor = 0.0
+    for index, segment in enumerate(segments):
+        legacy_starts.append(legacy_cursor)
+        output_starts.append(output_cursor)
+        duration = segment["out"] - segment["in"]
+        legacy_cursor += duration
+        output_cursor += round(duration * fps) / fps
+        if index < len(segments) - 1:
+            output_cursor -= transitions.get((segment["id"], segments[index + 1]["id"]), 0) / fps
+
+    def convert(value: float) -> float:
+        value = float(value)
+        index = len(segments) - 1
+        for candidate in range(len(segments) - 1):
+            boundary = legacy_starts[candidate + 1]
+            if value < boundary - 1e-9:
+                index = candidate
+                break
+        return round(max(0.0, min(output_cursor, output_starts[index] + value - legacy_starts[index])), 3)
+
+    for event in plan_data.get("captions", []):
+        event["start"], event["end"] = convert(event["start"]), convert(event["end"])
+    for event in plan_data.get("broll", []):
+        old_end = event["at"] + event["duration"]
+        event["at"] = convert(event["at"])
+        event["duration"] = round(max(0.001, convert(old_end) - event["at"]), 3)
+    for event in plan_data.get("sfx", []):
+        event["at"] = convert(event["at"])
+    if plan_data.get("music"):
+        for event in plan_data["music"].get("duck", []):
+            event["start"], event["end"] = convert(event["start"]), convert(event["end"])
+
+
+def _usable_audio_asset(path: Path) -> bool:
+    """Return whether a file exists and ffprobe confirms usable audio + duration."""
+    from engine.probe import probe
+
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        if path.stat().st_size <= 0:
+            return False
+        info = probe(path)
+        duration = float(info.get("format", {}).get("duration", 0))
+        return (
+            math.isfinite(duration)
+            and duration > 0
+            and any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
+        )
+    except Exception as exc:
+        log.debug("skipping unusable audio asset %s: %s", path, exc)
+        return False
+
+
 def _find_asset(job_dir: Path, kind: str) -> Optional[str]:
-    """Find a music/sfx file in the job's asset directories or project samples."""
+    """Find the first playable audio asset in the job or project directories."""
+
     search_dirs = [
+        Path(job_dir) / kind,
         PROJECT_ROOT / "assets" / kind,
         PROJECT_ROOT / "samples" / "media",
     ]
@@ -233,7 +437,7 @@ def _find_asset(job_dir: Path, kind: str) -> Optional[str]:
         if not d.exists():
             continue
         for f in sorted(d.iterdir()):
-            if f.suffix.lower() in extensions:
+            if f.suffix.lower() in extensions and _usable_audio_asset(f):
                 return str(f.resolve())
     return None
 
@@ -334,9 +538,10 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     # Load My Effects preferences if available
     my_effects = MyEffectsPreset()
     feedback = EffectFeedback()
+    selection_locked = bool(my_effects.selected_rafiei_style)
 
     keyframe_dir = None
-    if raw_video and raw_video.exists():
+    if not selection_locked and raw_video and raw_video.exists():
         keyframe_dir = raw_video.parent.parent / "keyframes"
         keyframe_dir.mkdir(exist_ok=True)
         chosen_indices = {0, len(segments) // 2, len(segments) - 1}
@@ -367,7 +572,7 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     total_dur = sum(s.get("out", 0) - s.get("in", 0) for s in segments)
     no_zoom = any("زوم نکن" in rule.get("text", "") or "no zoom" in rule.get("text", "").lower()
                   for rule in my_effects.rules)
-    if no_zoom:
+    if selection_locked or no_zoom:
         crit_usage = LLMUsage()
     else:
         original_types = {effect["segment_id"]: effect["type"] for effect in scored_effects}
@@ -380,6 +585,12 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
         {"segment_id": e["segment_id"], "type": e["type"]}
         for e in scored_effects
     ]
+    if selection_locked:
+        # Typed effects are authoritative, but also neutralise the legacy zoom
+        # field so the saved plan and visual editor cannot show a conflicting
+        # AI-generated zoom direction.
+        for segment in plan_data.get("segments", []):
+            segment["zoom"] = {"from": 1.0, "to": 1.0}
     # Save debug metadata separately so it doesn't fail schema validation
     plan_data["effect_analysis"] = [
         {
@@ -402,6 +613,121 @@ def _apply_scored_effects(plan_data: dict, analyses: list[dict], transcript: dic
     return combined
 
 
+def _enforce_effect_dislikes(plan_data: dict, dislikes: set[str]) -> None:
+    """Apply user exclusions after scoring, critic edits, and fallback choices."""
+    from engine.effects_v4 import EFFECT_FAMILIES_V4
+    excluded = set(dislikes)
+    for family in dislikes:
+        excluded.update(EFFECT_FAMILIES_V4.get(family, {}).get("ids", []))
+    replacement = next((candidate for candidate in ("steady__neutral", "slow_push__neutral", "slow_pull__neutral")
+                        if candidate not in excluded), None)
+    if replacement is None:
+        return
+    for effect in plan_data.get("visual_effects", []):
+        if effect.get("type") in excluded:
+            effect["type"] = replacement
+
+
+def _enforce_selected_effect(plan_data: dict, selected_effect: Optional[str]) -> None:
+    """Make one explicit My Effects choice authoritative for every segment."""
+    if not selected_effect:
+        return
+    plan_data["visual_effects"] = [
+        {"segment_id": segment["id"], "type": selected_effect}
+        for segment in plan_data.get("segments", [])
+    ]
+    for segment in plan_data.get("segments", []):
+        segment["zoom"] = {"from": 1.0, "to": 1.0}
+    plan_data["effect_analysis"] = [
+        {
+            "segment_id": segment["id"],
+            "family": "user_selected",
+            "reason": f"Locked by My Effects selection: {selected_effect}",
+            "source": "my_effects_selection",
+            "vision": None,
+            "intensity": 2,
+            "emphasis_start": None,
+        }
+        for segment in plan_data.get("segments", [])
+    ]
+
+
+def _output_segment_marks(plan_data: dict) -> tuple[list[tuple[float, float, str]], float]:
+    """Return output-timeline segment ranges using the same frame math as MLT."""
+    segments = plan_data.get("segments") or []
+    fps = max(1, int((plan_data.get("canvas") or {}).get("fps", 30)))
+    transitions = {
+        (item.get("from_segment_id"), item.get("to_segment_id")): int(item.get("duration_frames", 0))
+        for item in plan_data.get("transitions", [])
+    }
+    marks: list[tuple[float, float, str]] = []
+    cursor = 0
+    for index, segment in enumerate(segments):
+        start = cursor
+        duration_frames = round((float(segment.get("out", 0)) - float(segment.get("in", 0))) * fps)
+        end = start + max(0, duration_frames)
+        marks.append((start / fps, end / fps, segment["id"]))
+        cursor = end
+        if index < len(segments) - 1:
+            cursor -= transitions.get((segment["id"], segments[index + 1]["id"]), 0)
+    return marks, max(0, cursor) / fps
+
+
+def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
+    """Pick the most hook-worthy caption for the poster image.
+
+    Hook words (Persian negation/curiosity phrases) get the strongest bonus
+    so sentences like «سرمایه اولیه نمیخواد» always beat generic ones like
+    «کدوم رو انتخاب میکنید».
+    """
+    plan_data.pop("cover", None)          # cover removed, poster only
+
+    captions = plan_data.get("captions") or []
+    segments = plan_data.get("segments") or []
+    if not captions or not segments:
+        plan_data.pop("poster", None)
+        return
+
+    ranges, output_duration = _output_segment_marks(plan_data)
+    fps = max(1, int((plan_data.get("canvas") or {}).get("fps", 30)))
+    analysis_by_id = {a.get("segment_id"): a for a in analyses}
+
+    role_bonus = {"hook": 15, "claim": 12, "contrast": 10, "question": 12, "emotion": 8}
+    hook_words = (
+        "لازم نیست", "نمیخواد", "نمی‌خواد", "نداره", "بدون",
+        "چرا", "راز", "اشتباه", "؟", "?",
+    )
+
+    def score_caption(caption: dict) -> tuple[int, dict]:
+        text = " ".join(str(caption.get("text", "")).split())
+        mid = (float(caption.get("start", 0)) + float(caption.get("end", 0))) / 2
+        sid = next((s for a, b, s in reversed(ranges) if a - 1e-6 <= mid <= b + 1e-6), None)
+        analysis = analysis_by_id.get(sid, {})
+        words = text.split()
+        score = int(analysis.get("shareability_score", 5)) * 2   # lowered weight
+        score += role_bonus.get(analysis.get("role"), 0)
+        score += 50 if any(m in text for m in hook_words) else 0  # dominant signal
+        score += 6 if 3 <= len(words) <= 7 else (-10 if len(words) > 10 or len(words) < 2 else 0)
+        return score, analysis
+
+    ranked = [(score_caption(c), i, c) for i, c in enumerate(captions) if str(c.get("text", "")).strip()]
+    if not ranked:
+        plan_data.pop("poster", None)
+        return
+    (best_score, analysis), best_idx, best = max(ranked, key=lambda r: (r[0][0], -r[1]))
+
+    plan_data["poster"] = {
+        "text": " ".join(str(best["text"]).split()),
+        "frame_time": round(min(
+            max((float(best.get("start", 0)) + float(best.get("end", 0))) / 2, 0.0),
+            max(0.0, output_duration - 1 / fps),
+        ), 3),
+        "source_caption_index": best_idx,
+        "reason": (f"Hook score {best_score}: shareability "
+                   f"{analysis.get('shareability_score', 5)}/10, role {analysis.get('role', 'unknown')}"),
+    }
+
+
 def generate_plan(
     job_dir: Path,
     transcript: dict,
@@ -410,6 +736,13 @@ def generate_plan(
     source_rel: str,
     preset_name: str = "rafiei_reel",
     instruction: str = "",
+    caption_font: Optional[str] = None,
+    style_profile: Optional[dict] = None,
+    style_ref: Optional[dict] = None,
+    locked_transitions: Optional[list[dict]] = None,
+    output_kind: str = "reel",
+    transition_request: str = "",
+    transition_style: str = "auto",
     max_retries: int = 3,
     on_progress: Optional[callable] = None,
 ) -> tuple[dict, LLMUsage]:
@@ -423,6 +756,23 @@ def generate_plan(
     - Critic pass fixes obvious pacing issues (same family twice, static overrun)
     """
     preset = _load_preset(preset_name)
+    if style_profile:
+        from engine.style_library import _deep_merge
+        preset = _deep_merge(preset, {k: v for k, v in style_profile.items() if k != "learned"})
+
+    # Stage 5: overlay learned style profile if available and no explicit style pinned
+    learned_few_shot = []
+    if not style_profile:
+        try:
+            from brain.style_profile import load_learned_profile, merge_with_preset
+            learned = load_learned_profile()
+            if learned and learned.get("enabled", True) and learned.get("learned_metrics", {}).get("sufficient"):
+                preset = merge_with_preset(preset, learned)
+                learned_few_shot = learned.get("few_shot_examples", [])
+                log.info("applied learned style profile (%d references)",
+                         learned["learned_metrics"].get("sample_count", 0))
+        except Exception as exc:
+            log.warning("learned style profile load failed: %s", exc)
 
     music_file = _find_asset(job_dir, "music")
     sfx_file = _find_asset(job_dir, "sfx")
@@ -431,9 +781,23 @@ def generate_plan(
 
     # Pass no analyses yet — LLM produces layout + segments first, effects second
     system_prompt = _build_system_prompt(preset, language=lang, analyses=None)
+
+    # Stage 5: append few-shot examples from learned style
+    if learned_few_shot:
+        examples_text = "\n\n## Learned editing style examples\n"
+        examples_text += "These examples show the user's preferred editing rhythm from their reference reels:\n"
+        for ex in learned_few_shot[:3]:
+            examples_text += (
+                f"\n- Reference: {ex.get('source', 'unknown')} "
+                f"({ex.get('total_duration', 0)}s, {ex.get('segment_count', 0)} segments, "
+                f"avg cut {ex.get('avg_cut_length', 0)}s)\n"
+            )
+        examples_text += "\nMatch this pacing and cut rhythm in your plan."
+        system_prompt += examples_text
     user_prompt = _build_user_prompt(
         transcript, keep_ranges, remove_ranges,
-        source_rel, music_file, sfx_file, instruction,
+        source_rel, music_file, sfx_file, instruction, output_kind, transition_request,
+        transition_style,
     )
 
     total_usage = LLMUsage()
@@ -453,7 +817,7 @@ def generate_plan(
             user_prompt_with_errors = user_prompt
 
         try:
-            plan_data, usage = chat_json(system_prompt, user_prompt_with_errors)
+            plan_data, usage = chat_json(system_prompt, user_prompt_with_errors, timeout_seconds=300)
         except Exception as e:
             log.error("LLM call failed (attempt %d): %s", attempt, e)
             last_errors = [str(e)]
@@ -469,6 +833,7 @@ def generate_plan(
 
         # --- Smarter effect selection (V2) ---
         segments = plan_data.get("segments", [])
+        analyses: list[dict] = []
         if segments:
             if on_progress:
                 on_progress("analysing segments…")
@@ -502,7 +867,23 @@ def generate_plan(
         else:
             _ensure_visual_effects(plan_data)
 
+        # The critic or a fallback plan can introduce an effect after scoring.
+        # Keep explicit My Effects dislikes authoritative in the saved plan.
+        from engine.effects_v4 import MyEffectsPreset
+        my_effects = MyEffectsPreset()
+        _enforce_selected_effect(plan_data, my_effects.selected_rafiei_style)
+        _enforce_effect_dislikes(plan_data, my_effects.dislikes)
+
+        _suggest_transitions(plan_data, analyses, locked_transitions, output_kind,
+                             transition_request, transition_style)
+        _retime_for_transition_overlaps(plan_data)
         _clamp_output_events(plan_data)
+        _apply_poster(plan_data, analyses)
+        if caption_font:
+            plan_data.setdefault("canvas", {})["caption_font"] = caption_font
+        if style_ref:
+            plan_data["style_profile"] = dict(style_ref)
+        plan_data.setdefault("style", preset_name)
         plan_data["caption_review"] = _caption_review(plan_data, transcript)
 
         plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
@@ -513,6 +894,48 @@ def generate_plan(
             log.info("plan validated on attempt %d", attempt)
             if media_warnings:
                 log.warning("media warnings: %s", media_warnings)
+
+            # Stage 3: resolve broll queries + missing music/sfx from library
+            try:
+                from .asset_match import resolve_plan_assets
+                resolutions = resolve_plan_assets(plan_data, base_dir=job_dir)
+                resolved_count = len(resolutions.get("broll", []))
+                if resolved_count:
+                    log.info("resolved %d broll queries from library", resolved_count)
+            except Exception as exc:
+                log.warning("asset resolution skipped: %s", exc)
+
+            # A selected empty/corrupt optional track should not turn a valid
+            # generated edit into a late MLT/ffprobe failure. Keep valid user
+            # assets untouched; omit only tracks that cannot be decoded.
+            music = plan_data.get("music")
+            if music and music.get("file"):
+                music_path = Path(music["file"])
+                if not music_path.is_absolute():
+                    job_local = Path(job_dir) / music_path
+                    music_path = job_local if job_local.exists() else PROJECT_ROOT / music_path
+                if not _usable_audio_asset(music_path):
+                    plan_data["music"] = None
+                    plan_data.setdefault("asset_warnings", []).append(
+                        "Music was omitted because the selected file has no decodable audio stream."
+                    )
+                    log.warning("omitted unusable optional music file %s", music_path)
+
+            valid_sfx = []
+            for sound in plan_data.get("sfx", []):
+                sfx_path = Path(sound.get("file", ""))
+                if not sfx_path.is_absolute():
+                    job_local = Path(job_dir) / sfx_path
+                    sfx_path = job_local if job_local.exists() else PROJECT_ROOT / sfx_path
+                if _usable_audio_asset(sfx_path):
+                    valid_sfx.append(sound)
+                else:
+                    plan_data.setdefault("asset_warnings", []).append(
+                        f"SFX at {sound.get('at', '?')}s was omitted because its file has no decodable audio stream."
+                    )
+                    log.warning("omitted unusable optional SFX file %s", sfx_path)
+            plan_data["sfx"] = valid_sfx
+
             return plan_data, total_usage
 
         log.warning("plan invalid (attempt %d): %s", attempt, errors)
@@ -520,7 +943,7 @@ def generate_plan(
 
     raise ValueError(
         f"Failed to generate a valid plan after {max_retries} attempts. "
-        f"Last errors: {'; '.join(last_errors)}"
+        f"Final errors: {'; '.join(last_errors)}"
     )
 
 
@@ -546,7 +969,9 @@ def _clamp_segments(plan_data: dict, job_dir: Path, source_rel: str) -> None:
 
 def _clamp_output_events(plan_data: dict) -> None:
     """Trim model output events to the duration of its kept source segments."""
-    duration = sum(s["out"] - s["in"] for s in plan_data.get("segments", []))
+    fps = int((plan_data.get("canvas") or {}).get("fps", 30))
+    duration = sum(round((s["out"] - s["in"]) * fps) for s in plan_data.get("segments", [])) / fps
+    duration -= sum(int(t.get("duration_frames", 0)) for t in plan_data.get("transitions", [])) / fps
     for key in ("captions",):
         events = []
         for event in plan_data.get(key, []):
@@ -565,6 +990,13 @@ def _clamp_output_events(plan_data: dict) -> None:
             if duck["end"] > duck["start"]:
                 ducks.append(duck)
         plan_data["music"]["duck"] = ducks
+    for broll in plan_data.get("broll", []):
+        if broll["at"] >= duration:
+            broll["at"] = round(max(0.0, duration - 0.1), 3)
+        broll["duration"] = round(max(0.001, min(broll["duration"], duration - broll["at"])), 3)
+    for sfx in plan_data.get("sfx", []):
+        if sfx["at"] > duration:
+            sfx["at"] = round(max(0.0, duration - 0.001), 3)
 
 
 def _check_media_soft(plan_data: dict, job_dir: Path) -> list[str]:

@@ -8,7 +8,10 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from brain.silence import word_gap_ranges, merge_ranges, _invert, detect_pauses
-from brain.planner import source_to_output_time, output_to_source_time, generate_plan, _caption_review, _ensure_visual_effects
+from brain.planner import (
+    source_to_output_time, output_to_source_time, generate_plan, _caption_review,
+    _ensure_visual_effects, _apply_poster, _enforce_selected_effect,
+)
 from brain.llm import LLMUsage, _extract_json, chat_json
 
 
@@ -167,11 +170,96 @@ def test_planner_generates_valid_plan(tmp_path):
     from engine.effects_v4 import EFFECT_CATALOG_V4
     assert plan["segments"][0]["id"] == "s1"
     assert len(plan["captions"]) == 2
+    assert "cover" not in plan
     assert len(plan["visual_effects"]) == len(plan["segments"])
     # Smarter scorer may assign any valid catalog effect (not necessarily steady__neutral)
     assert plan["visual_effects"][0]["type"] in EFFECT_CATALOG_V4
     # V2 planner makes additional LLM calls (segment analysis + effect selection)
     assert usage.input_tokens >= 1000
+
+
+def test_selected_my_effect_is_authoritative_and_neutralises_legacy_zoom():
+    plan = {
+        "segments": [
+            {"id": "s1", "in": 0, "out": 2, "zoom": {"from": 1, "to": 1.2}},
+            {"id": "s2", "in": 2, "out": 4, "zoom": {"from": 1.2, "to": 1}},
+        ],
+        "visual_effects": [
+            {"segment_id": "s1", "type": "vignette_pulse"},
+            {"segment_id": "s2", "type": "punch__neutral"},
+        ],
+    }
+    _enforce_selected_effect(plan, "slow_push__neutral")
+    assert [effect["type"] for effect in plan["visual_effects"]] == [
+        "slow_push__neutral", "slow_push__neutral"]
+    assert all(segment["zoom"] == {"from": 1.0, "to": 1.0} for segment in plan["segments"])
+    assert all(item["source"] == "my_effects_selection" for item in plan["effect_analysis"])
+
+
+def test_poster_prefers_hook_word_over_higher_shareability_generic_question():
+    plan = {
+        "segments": [
+            {"id": "s1", "in": 0, "out": 3},
+            {"id": "s2", "in": 3, "out": 6},
+        ],
+        "captions": [
+            {"start": 0, "end": 2, "text": "کدوم رو انتخاب میکنید", "style": "normal"},
+            {"start": 3, "end": 5, "text": "سرمایه اولیه نمیخواد", "style": "normal"},
+        ],
+        "cover": {"text": "کدوم رو انتخاب میکنید", "source_caption_index": 0},
+    }
+    analyses = [
+        {"segment_id": "s1", "role": "question", "shareability_score": 10},
+        {"segment_id": "s2", "role": "claim", "shareability_score": 1},
+    ]
+    _apply_poster(plan, analyses)
+    assert "cover" not in plan
+    assert plan["poster"]["text"] == "سرمایه اولیه نمیخواد"
+    assert plan["poster"]["source_caption_index"] == 1
+    assert plan["poster"]["frame_time"] == 4.0
+    assert "Hook score 70" in plan["poster"]["reason"]
+
+
+def test_poster_picks_stronger_hook_and_breaks_ties_by_caption_order():
+    plan = {
+        "segments": [{"id": "s1", "in": 0, "out": 3}, {"id": "s2", "in": 3, "out": 6}],
+        "captions": [
+            {"start": 0, "end": 2, "text": "سرمایه اولیه نمیخواد", "style": "emphasis"},
+            {"start": 3, "end": 5, "text": "چرا همه اشتباه میکنن؟", "style": "normal"},
+        ],
+    }
+    same = [{"segment_id": "s1", "role": "claim", "shareability_score": 9},
+            {"segment_id": "s2", "role": "claim", "shareability_score": 9}]
+    _apply_poster(plan, same)
+    assert plan["poster"]["text"] == "سرمایه اولیه نمیخواد"
+    assert plan["poster"]["source_caption_index"] == 0
+
+    better = [{"segment_id": "s1", "role": "claim", "shareability_score": 5},
+              {"segment_id": "s2", "role": "hook", "shareability_score": 10}]
+    _apply_poster(plan, better)
+    assert plan["poster"]["text"] == "چرا همه اشتباه میکنن؟"
+    assert plan["poster"]["source_caption_index"] == 1
+    assert plan["poster"]["frame_time"] == 4.0
+
+
+def test_poster_uses_transition_aware_segment_timing():
+    plan = {
+        "canvas": {"fps": 30},
+        "segments": [{"id": "s1", "in": 0, "out": 3}, {"id": "s2", "in": 3, "out": 6}],
+        "transitions": [{"from_segment_id": "s1", "to_segment_id": "s2", "duration_frames": 15}],
+        "captions": [
+            {"start": 0.5, "end": 1.5, "text": "مقدمه بی اهمیت", "style": "normal"},
+            {"start": 3.5, "end": 4.5, "text": "نکته اصلی جذاب", "style": "emphasis"},
+        ],
+    }
+    analyses = [
+        {"segment_id": "s1", "role": "claim", "shareability_score": 3},
+        {"segment_id": "s2", "role": "hook", "shareability_score": 10},
+    ]
+    _apply_poster(plan, analyses)
+    assert "cover" not in plan
+    assert plan["poster"]["source_caption_index"] == 1
+    assert plan["poster"]["frame_time"] == 4.0
 
 
 def test_planner_retries_on_invalid(tmp_path):
@@ -320,6 +408,7 @@ def test_jarvis_provider_mocked():
 
     fake_cls.assert_called_once_with(
         api_key="pmai_test_key", base_url="https://api.jarvis.you/v1",
+        timeout=300.0, max_retries=0,
     )
     call_kwargs = fake_client.chat.completions.create.call_args
     assert call_kwargs.kwargs["model"] == "GPT_6_LUNA"
@@ -367,5 +456,72 @@ def test_openai_compatible_provider_mocked():
 
     fake_cls.assert_called_once_with(
         api_key="key123", base_url="https://example.com/v1",
+        timeout=300.0, max_retries=0,
     )
     assert result == {"x": 42}
+
+
+def _transition_fixture():
+    plan = {"canvas": {"fps": 30},
+            "segments": [{"id": "s1", "in": 0, "out": 3}, {"id": "s2", "in": 3, "out": 6}]}
+    return plan, [{"segment_id": "s1"}, {"segment_id": "s2"}]
+
+
+def test_transition_style_none_forces_hard_cut():
+    from brain.planner import _suggest_transitions
+    plan, analyses = _transition_fixture()
+    plan["transitions"] = [{"from_segment_id": "s1", "to_segment_id": "s2",
+                            "type": "crossfade", "duration_frames": 6}]
+    _suggest_transitions(plan, analyses, output_kind="reel", transition_style="none")
+    assert plan["transitions"][0]["type"] == "hard_cut"
+    assert plan["transitions"][0]["duration_frames"] == 0
+    assert plan["transition_context"]["style"] == "none"
+
+
+def test_transition_style_crossfade_respects_format_cap():
+    from brain.planner import _suggest_transitions
+    plan, analyses = _transition_fixture()
+    _suggest_transitions(plan, analyses, output_kind="post", transition_style="crossfade")
+    t = plan["transitions"][0]
+    assert t["type"] == "crossfade" and 2 <= t["duration_frames"] <= 8
+    assert plan["transition_context"]["output_kind"] == "post"
+
+
+def test_locked_manual_transition_wins_over_regeneration_policy():
+    from brain.planner import _suggest_transitions
+    plan, analyses = _transition_fixture()
+    locked = [{"from_segment_id": "s1", "to_segment_id": "s2",
+               "type": "directional", "duration_frames": 9, "direction": "up",
+               "intensity": 0.8, "source": "manual", "locked": True}]
+    _suggest_transitions(plan, analyses, locked_transitions=locked,
+                         output_kind="post", transition_style="none")
+    assert plan["transitions"] == locked
+
+
+def test_auto_uses_supported_ai_boundary_choice_and_clamps_to_format():
+    from brain.planner import _suggest_transitions
+    plan, analyses = _transition_fixture()
+    plan["transitions"] = [{"from_segment_id": "s1", "to_segment_id": "s2",
+                            "type": "directional", "duration_frames": 20,
+                            "direction": "right", "intensity": 0.9}]
+    _suggest_transitions(plan, analyses, output_kind="story", transition_style="auto",
+                         transition_request="only at topic changes")
+    transition = plan["transitions"][0]
+    assert transition["type"] == "directional"
+    assert transition["duration_frames"] == 10
+    assert transition["direction"] == "right"
+    assert plan["transition_analysis"][0]["source"] == "planner"
+
+
+def test_zoom_selection_is_planned_and_short_segments_fall_back_to_cut():
+    from brain.planner import _suggest_transitions
+    plan, analyses = _transition_fixture()
+    _suggest_transitions(plan, analyses, output_kind="post", transition_style="zoom")
+    transition = plan["transitions"][0]
+    assert transition["type"] == "zoom" and transition["duration_frames"] <= 8
+    assert transition["zoom_mode"] == "zoom_in" and transition["zoom_scale"] == 1.12
+    short = {"canvas": {"fps": 30}, "segments": [
+        {"id": "s1", "in": 0, "out": 0.03}, {"id": "s2", "in": 0.03, "out": 0.06}]}
+    _suggest_transitions(short, analyses, transition_style="zoom")
+    assert short["transitions"][0]["type"] == "hard_cut"
+    assert short["transitions"][0]["duration_frames"] == 0

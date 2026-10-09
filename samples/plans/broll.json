@@ -1,0 +1,31 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "source": "../media/raw.mp4",
+  "segments": [
+    {
+      "id": "s1",
+      "in": 0.0,
+      "out": 4.0
+    }
+  ],
+  "captions": [],
+  "broll": [
+    {
+      "at": 1.0,
+      "duration": 1.5,
+      "file": "../media/broll.mp4",
+      "in": 0.5
+    }
+  ],
+  "sfx": [],
+  "export": {
+    "file": "out_broll.mp4",
+    "crf": 23
+  }
+}

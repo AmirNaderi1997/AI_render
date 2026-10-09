@@ -1,8 +1,14 @@
 """Render a project.mlt with melt. Streams progress as 0..100 ints."""
 from __future__ import annotations
+import hashlib
+from math import gcd
+import os
+import platform
 import re
 import shutil
 import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
@@ -10,6 +16,7 @@ from .captions import fonts_dir, load_style
 
 
 _PROGRESS_RE = re.compile(r"percentage[: ]\s*(\d+)", re.IGNORECASE)
+_RAY_RENDER_FONTS = ("RAY-EXTRABLACK.TTF", "RAY-EXTRABOLD.TTF")
 
 
 def melt_bin() -> str:
@@ -21,12 +28,74 @@ def melt_bin() -> str:
     raise RuntimeError("melt not found on PATH; install MLT (brew install mlt)")
 
 
-def _melt_env(style: dict) -> dict:
-    import os
+def _macos_font_loader() -> Path:
+    """Build and cache the CoreText loader used by Homebrew melt/Qt on macOS."""
+    import fcntl
+
+    source = Path(__file__).with_name("macos_font_loader.c")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()[:16]
+    cache_dir = Path(tempfile.gettempdir()) / "ai-render-font-loader"
+    cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    loader = cache_dir / f"font-loader-{platform.machine()}-{digest}.dylib"
+    lock_path = cache_dir / "build.lock"
+
+    with lock_path.open("a+b") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if loader.is_file():
+            return loader
+        clang = shutil.which("clang")
+        if clang is None:
+            raise RuntimeError(
+                "clang is required to prepare the project-local macOS font loader"
+            )
+        pending = loader.with_name(f".{loader.name}.{os.getpid()}.tmp")
+        try:
+            subprocess.run(
+                [clang, "-dynamiclib", "-O2", "-framework", "CoreFoundation",
+                 "-framework", "CoreText", str(source), "-o", str(pending)],
+                check=True, capture_output=True, text=True,
+            )
+            os.replace(pending, loader)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"failed to build macOS font loader: {exc.stderr.strip()}"
+            ) from exc
+        finally:
+            pending.unlink(missing_ok=True)
+    return loader
+
+
+def _melt_env(style: dict, additional_font_files: Optional[list[Path]] = None) -> dict:
     env = os.environ.copy()
     fd = fonts_dir(style)
+    font_files = [Path(p).resolve() for p in (additional_font_files or [])]
     if fd:
-        env["FONTCONFIG_PATH"] = str(fd)
+        font_files.extend((fd / name).resolve() for name in _RAY_RENDER_FONTS)
+    font_files = list(dict.fromkeys(p for p in font_files if p.is_file()))
+    if font_files and platform.system() == "Darwin":
+        missing = [str(path) for path in font_files if not path.is_file()]
+        if missing:
+            raise RuntimeError(f"bundled render font missing: {', '.join(missing)}")
+        loader = str(_macos_font_loader())
+        inserted = [p for p in env.get("DYLD_INSERT_LIBRARIES", "").split(":") if p]
+        if loader not in inserted:
+            inserted.insert(0, loader)
+        env["DYLD_INSERT_LIBRARIES"] = ":".join(inserted)
+        env["AI_RENDER_FONT_FILES"] = "\n".join(str(path) for path in font_files)
+        # Homebrew MLT's Qt 6 Cocoa backend uses CoreText, not fontconfig.
+        env.pop("FONTCONFIG_PATH", None)
+        env.pop("FONTCONFIG_FILE", None)
+    elif font_files:
+        # Make user-approved files visible to Fontconfig without installing
+        # them system-wide. A per-process config preserves system defaults.
+        import xml.sax.saxutils as xml_utils
+        config_dir = Path(tempfile.gettempdir()) / "ai-render-fontconfig"
+        config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        config = config_dir / "fonts.conf"
+        font_dirs = sorted({p.parent for p in font_files})
+        dirs = "".join(f"<dir>{xml_utils.escape(str(p))}</dir>" for p in font_dirs)
+        config.write_text(f"<?xml version='1.0'?><fontconfig><include>/etc/fonts/fonts.conf</include>{dirs}</fontconfig>")
+        env["FONTCONFIG_FILE"] = str(config)
     return env
 
 
@@ -71,17 +140,19 @@ def render(
     style_name: str = "rafiei_reel",
     on_progress: Optional[Callable[[int], None]] = None,
     apply_loudnorm: bool = False,
+    style_override: Optional[dict] = None,
+    crf_override: Optional[int] = None,
 ) -> Path:
-    """Render mlt to out (mp4). Preview = 540x960, veryfast.
+    """Render an MLT project using the plan's selected style and export settings.
 
     When ``apply_loudnorm`` is set, a second pass runs ``ffmpeg -af loudnorm``
     targeting the LUFS value from the style preset (defaults to -14).
     """
     melt = melt_bin()
 
-    style = load_style(style_name)
+    style = style_override or load_style(style_name)
     render_cfg = style.get("render", {})
-    crf = render_cfg.get("crf", 20)
+    crf = crf_override if crf_override is not None else render_cfg.get("crf", 20)
     ab = render_cfg.get("audio_bitrate", "192k")
 
     out = Path(out)
@@ -93,41 +164,66 @@ def render(
         render_target = out.with_name(out.stem + ".raw" + out.suffix)
 
     src_w, src_h, src_fps = _profile_from_mlt(Path(mlt).read_text())
+    aspect_divisor = gcd(src_w, src_h)
+    display_aspect_num = src_w // aspect_divisor
+    display_aspect_den = src_h // aspect_divisor
 
     cmd = [melt, str(mlt), "-progress"]
     if preview:
-        # Preview at half the source dimensions (rounded to even).
-        w = (src_w // 2) & ~1
-        h = (src_h // 2) & ~1
+        # Use the selected preset's preview scale while preserving the canvas
+        # aspect and H.264's even-dimension requirement.
+        scale = render_cfg.get("preview_scale", 0.5)
+        try:
+            scale = float(scale)
+        except (TypeError, ValueError):
+            scale = 0.5
+        scale = min(1.0, max(0.1, scale))
+        w = max(2, int(src_w * scale) & ~1)
+        h = max(2, int(src_h * scale) & ~1)
+        preview_crf = int(render_cfg.get("preview_crf", 22))
         cmd += ["-consumer", f"avformat:{render_target}",
                 f"width={w}", f"height={h}",
                 f"frame_rate_num={src_fps}", "frame_rate_den=1",
                 "sample_aspect_num=1", "sample_aspect_den=1",
-                "display_aspect_num=9", "display_aspect_den=16",
+                f"display_aspect_num={display_aspect_num}",
+                f"display_aspect_den={display_aspect_den}",
                 "progressive=1",
-                "vcodec=libx264", "crf=26", "preset=veryfast",
+                "vcodec=libx264", f"crf={preview_crf}", "preset=veryfast",
                 "acodec=aac", f"ab=128k"]
     else:
         cmd += ["-consumer", f"avformat:{render_target}",
                 f"width={src_w}", f"height={src_h}",
                 f"frame_rate_num={src_fps}", "frame_rate_den=1",
                 "sample_aspect_num=1", "sample_aspect_den=1",
-                "display_aspect_num=9", "display_aspect_den=16",
+                f"display_aspect_num={display_aspect_num}", f"display_aspect_den={display_aspect_den}",
                 "progressive=1",
-                "vcodec=libx264", f"crf={crf}", "preset=medium",
+                "vcodec=libx264", f"crf={crf}", f"preset={render_cfg.get('preset', 'medium')}",
                 "acodec=aac", f"ab={ab}"]
 
-    rc = _run_and_stream(cmd, _melt_env(style), on_progress)
+    font_file = None
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.parse(mlt).getroot()
+        font_file = root.findtext("property[@name='ai-render:caption_font_file']")
+    except (ET.ParseError, OSError, NameError):
+        pass
+    rc = _run_and_stream(cmd, _melt_env(style, [Path(font_file)] if font_file else None), on_progress)
     if rc != 0:
         raise RuntimeError(f"melt failed with exit code {rc}")
 
     if apply_loudnorm:
-        target_lufs = float(render_cfg.get("loudness_lufs", -14))
-        loudnorm(render_target, out, target_lufs=target_lufs)
         try:
-            render_target.unlink()
-        except OSError:
-            pass
+            # A silent source can still be edited/rendered normally. Do not
+            # turn the optional normalization step into a failure when the
+            # output has no audio stream to normalize.
+            from .probe import has_audio
+            if has_audio(render_target):
+                target_lufs = float(render_cfg.get("loudness_lufs", -14))
+                loudnorm(render_target, out, target_lufs=target_lufs)
+            else:
+                os.replace(render_target, out)
+        finally:
+            render_target.unlink(missing_ok=True)
     return out
 
 
@@ -135,10 +231,16 @@ def loudnorm(src: Path, dst: Path, target_lufs: float = -14, true_peak: float = 
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found on PATH")
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # MLT/AAC can pad the audio past the last video frame. Keep normalization
+    # on the video timeline and undo loudnorm's automatic 192 kHz upsampling.
+    from .probe import probe
+    video = next((s for s in probe(src).get("streams", []) if s.get("codec_type") == "video"), {})
+    video_duration = float(video.get("duration") or 0)
+    trim = ["-t", str(video_duration)] if video_duration > 0 else []
     subprocess.run(
         ["ffmpeg", "-y", "-i", str(src),
          "-af", f"loudnorm=I={target_lufs}:TP={true_peak}",
-         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", str(dst)],
+         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", *trim, str(dst)],
         check=True, capture_output=True,
     )
     return dst
@@ -158,3 +260,36 @@ def measure_lufs(src: Path) -> Optional[float]:
     if not m:
         return None
     return float(m.group(1))
+
+
+def export_poster(plan, job_dir: Path, out: Path, base_dir: Optional[Path] = None,
+                  style_name: str = "rafiei_reel", style_override: Optional[dict] = None,
+                  style_ref: Optional[dict] = None) -> Optional[Path]:
+    """Export ``plan.poster`` as a JPEG still with its text burned in.
+
+    Builds a throwaway MLT project where the poster text takes the cover slot
+    at ``poster.frame_time`` (same font/style as the cover, shaped by MLT like
+    the video captions), then renders that single frame with melt.
+    """
+    if not plan.poster:
+        return None
+    from .build_mlt import build
+    from .schema import Cover
+
+    t = plan.poster.frame_time
+    cover = Cover(text=plan.poster.text, start=t, end=t + 0.5)
+    poster_plan = plan.model_copy(update={"cover": cover})
+    mlt, _ = build(poster_plan, Path(job_dir) / "poster_build", base_dir=base_dir,
+                   style_name=style_name, style_override=style_override, style_ref=style_ref)
+    _, _, fps = _profile_from_mlt(mlt.read_text())
+    frame = int(round(t * fps))
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [melt_bin(), str(mlt), f"in={frame}", f"out={frame}", "-consumer",
+           f"avformat:{out}", "vcodec=mjpeg", "qscale=2", "an=1"]
+    font_file = ET.parse(mlt).getroot().findtext("property[@name='ai-render:caption_font_file']")
+    active_style = style_override or load_style(style_name)
+    rc = _run_and_stream(cmd, _melt_env(active_style, [Path(font_file)] if font_file else None), None)
+    if rc != 0 or not out.exists():
+        raise RuntimeError(f"poster export failed (melt exit {rc})")
+    return out

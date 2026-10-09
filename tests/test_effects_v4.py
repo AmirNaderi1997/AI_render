@@ -8,8 +8,11 @@ import pytest
 
 from engine.effects_v4 import (
     EXTENDED_EFFECTS,
+    RENDERABLE_EXTENDED_EFFECTS,
+    UNSUPPORTED_EFFECTS,
     EFFECT_CATALOG_V4,
     EFFECT_FAMILIES_V4,
+    catalog_for_api,
     MyEffectsPreset,
     EffectFeedback,
     effect_filter_xml_v4,
@@ -19,6 +22,50 @@ from brain.effect_score_v4 import (
     select_effects_with_vision,
     _identify_edit_story,
 )
+
+
+@pytest.mark.parametrize("effect_id", sorted(RENDERABLE_EXTENDED_EFFECTS))
+def test_extended_effect_changes_rendered_video_pixels(tmp_path, has_melt, effect_id):
+    """Installed MLT services must apply each selectable V4 effect, not no-op."""
+    import shutil
+    import subprocess
+    from engine.build_mlt import build
+    from engine.render import render
+    from engine.schema import validate_plan
+
+    if not has_melt or not shutil.which("ffmpeg"):
+        pytest.skip("requires ffmpeg and melt")
+
+    source = tmp_path / "pattern.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+        "testsrc2=size=320x240:rate=30:duration=1.2",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True, capture_output=True)
+
+    def rendered_frame(name: str, selected_effect: str | None) -> str:
+        data = {
+            "canvas": {"width": 320, "height": 240, "fps": 30},
+            "source": str(source),
+            "segments": [{"id": "s1", "in": 0, "out": 1.1}],
+            "visual_effects": ([{"segment_id": "s1", "type": selected_effect}]
+                               if selected_effect else []),
+            "export": {"file": f"{name}.mp4"},
+        }
+        plan, errors = validate_plan(data, base_dir=tmp_path, check_media=True)
+        assert not errors, errors
+        mlt, _ = build(plan, tmp_path / f"{name}-build", base_dir=tmp_path)
+        output = tmp_path / f"{name}.mp4"
+        render(mlt, output)
+        hashes = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-i", str(output), "-map", "0:v:0",
+            "-frames:v", "1", "-f", "framemd5", "-",
+        ], text=True)
+        return [line.split(",")[-1].strip() for line in hashes.splitlines()
+                if line and not line.startswith("#")][0]
+
+    baseline = rendered_frame("baseline", None)
+    assert rendered_frame(effect_id, effect_id) != baseline
 
 
 class TestNewEffectsRender:
@@ -34,12 +81,16 @@ class TestNewEffectsRender:
         }
         assert expected.issubset(set(EXTENDED_EFFECTS.keys()))
 
-    def test_effect_filter_xml_renders_without_error(self):
-        """All effects generate XML without crashing (may be placeholder)."""
-        for effect_id in EXTENDED_EFFECTS:
+    def test_renderable_effect_filter_xml_is_nonempty_and_unsupported_fails(self):
+        """Every selectable effect has a concrete renderer; unsupported ones fail clearly."""
+        for effect_id in RENDERABLE_EXTENDED_EFFECTS:
             xml = effect_filter_xml_v4(effect_id, frames=30, width=1080, height=1920, punch_frames=5)
-            # XML should be non-empty or contain a comment
-            assert isinstance(xml, str)
+            assert isinstance(xml, str) and xml.strip()
+            assert "<!--" not in xml
+        for effect_id in UNSUPPORTED_EFFECTS:
+            with pytest.raises(ValueError, match="cannot be rendered"):
+                effect_filter_xml_v4(effect_id, frames=30, width=1080, height=1920, punch_frames=5)
+        assert not (set(UNSUPPORTED_EFFECTS) & {effect["id"] for effect in catalog_for_api()})
 
     def test_legacy_effects_still_render(self):
         """V3 effects fall back to legacy rendering."""
@@ -52,7 +103,7 @@ class TestNewEffectsRender:
         This is a mock test since we can't actually render; production would use ffprobe.
         """
         # Effects are filters, not clips, so duration is preserved
-        for effect_id in EXTENDED_EFFECTS:
+        for effect_id in RENDERABLE_EXTENDED_EFFECTS:
             xml = effect_filter_xml_v4(effect_id, frames=30, width=1080, height=1920, punch_frames=5)
             # Filters should not have <clip> or duration-changing elements
             assert "<clip" not in xml or "duration" not in xml

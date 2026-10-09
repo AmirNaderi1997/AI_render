@@ -1,0 +1,43 @@
+{
+  "version": "0.1",
+  "style": "rafiei_reel",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "source": "../media/raw.mp4",
+  "segments": [
+    {
+      "id": "s1",
+      "in": 0.0,
+      "out": 4.0
+    }
+  ],
+  "captions": [
+    {
+      "start": 0.0,
+      "end": 1.5,
+      "text": "Normal caption",
+      "style": "normal"
+    },
+    {
+      "start": 1.5,
+      "end": 3.0,
+      "text": "Emphasis caption",
+      "style": "emphasis"
+    },
+    {
+      "start": 3.0,
+      "end": 4.0,
+      "text": "Follow for more",
+      "style": "cta"
+    }
+  ],
+  "broll": [],
+  "sfx": [],
+  "export": {
+    "file": "out_captions.mp4",
+    "crf": 23
+  }
+}

@@ -64,6 +64,12 @@ def build_kdenlive(mlt_path: Path, out_path: Path | None = None) -> Path:
     mlt_path = Path(mlt_path).resolve()
     out_path = Path(out_path) if out_path else mlt_path.with_suffix(".kdenlive")
     render = ET.parse(mlt_path).getroot()
+    font_metadata = {p.get("name"): p.text or "" for p in render.findall("property")
+                     if (p.get("name") or "").startswith("ai-render:caption")}
+    style_metadata = {p.get("name"): p.text or "" for p in render.findall("property")
+                      if (p.get("name") or "").startswith("ai-render:style_")}
+    if font_metadata.get("ai-render:caption_font_relative_path"):
+        font_metadata["ai-render:caption_font_file"] = font_metadata["ai-render:caption_font_relative_path"]
     profile = copy.deepcopy(render.find("profile"))
     if profile is None:
         raise ValueError("render MLT has no profile")
@@ -112,40 +118,46 @@ def build_kdenlive(mlt_path: Path, out_path: Path | None = None) -> Path:
     for number, (name, audio) in enumerate((("A2", True), ("A1", True),
                                            ("V1", False), ("V2", False))):
         old = render.find(f"playlist[@id='{name.lower()}']")
-        if old is None:
+        transition_tractor = render.find("tractor[@id='v1']") if name == "V1" else None
+        source_lanes = ([render.find("playlist[@id='v1a']"), render.find("playlist[@id='v1b']")]
+                        if transition_tractor is not None else [old, None])
+        if source_lanes[0] is None:
             raise ValueError(f"render MLT lacks {name}")
         lane_a = ET.SubElement(root, "playlist", id=f"playlist{number * 2}")
         lane_b = ET.SubElement(root, "playlist", id=f"playlist{number * 2 + 1}")
         if audio:
             _prop(lane_a, "kdenlive:audio_track", 1)
             _prop(lane_b, "kdenlive:audio_track", 1)
-        for item in old:
-            if item.tag not in ("entry", "blank"):
+        for source_lane, target_lane in zip(source_lanes, (lane_a, lane_b)):
+            if source_lane is None:
                 continue
-            entry = copy.deepcopy(item)
-            if entry.tag == "entry":
-                if entry.get("in") is not None:
-                    entry.set("in", _time(int(entry.get("in")), fps))
-                if entry.get("out") is not None:
-                    entry.set("out", _time(int(entry.get("out")), fps))
-                _prop(entry, "kdenlive:id", ids[entry.get("producer")])
-                for filt in list(entry.findall("filter")):
-                    service = filt.attrib.pop("mlt_service", None)
-                    if service == "avfilter.afade":
-                        entry.remove(filt)
-                        continue
-                    if service:
-                        _prop(filt, "mlt_service", service)
-                        _prop(filt, "kdenlive_id", "affine" if service == "affine" else service)
-                    if name == "A1" and service == "volume":
-                        level = next((p for p in filt.findall("property") if p.get("name") == "level"), None)
-                        if level is not None:
-                            fade_start = max(0, total - round(0.8 * fps))
-                            last = (level.text or "0=-14").split(";")[-1].split("=")[-1]
-                            level.text = (level.text or "") + f";{fade_start}={last};{total - 1}=-60"
-            else:
-                entry.set("length", _time(int(entry.get("length", "0")), fps))
-            lane_a.append(entry)
+            for item in source_lane:
+                if item.tag not in ("entry", "blank"):
+                    continue
+                entry = copy.deepcopy(item)
+                if entry.tag == "entry":
+                    if entry.get("in") is not None:
+                        entry.set("in", _time(int(entry.get("in")), fps))
+                    if entry.get("out") is not None:
+                        entry.set("out", _time(int(entry.get("out")), fps))
+                    _prop(entry, "kdenlive:id", ids[entry.get("producer")])
+                    for filt in list(entry.findall("filter")):
+                        service = filt.attrib.pop("mlt_service", None)
+                        if service == "avfilter.afade":
+                            entry.remove(filt)
+                            continue
+                        if service:
+                            _prop(filt, "mlt_service", service)
+                            _prop(filt, "kdenlive_id", "affine" if service == "affine" else service)
+                        if name == "A1" and service == "volume":
+                            level = next((p for p in filt.findall("property") if p.get("name") == "level"), None)
+                            if level is not None:
+                                fade_start = max(0, total - round(0.8 * fps))
+                                last = (level.text or "0=-14").split(";")[-1].split("=")[-1]
+                                level.text = (level.text or "") + f";{fade_start}={last};{total - 1}=-60"
+                else:
+                    entry.set("length", _time(int(entry.get("length", "0")), fps))
+                target_lane.append(entry)
         track_id = f"tractor{number}"
         track_ids.append(track_id)
         tractor = ET.SubElement(root, "tractor", id=track_id, **{"in": "0", "out": end})
@@ -157,6 +169,18 @@ def build_kdenlive(mlt_path: Path, out_path: Path | None = None) -> Path:
         for lane in (lane_a, lane_b):
             ET.SubElement(tractor, "track", producer=lane.get("id"),
                           hide="video" if audio else "audio")
+        if transition_tractor is not None:
+            for source_transition in transition_tractor.findall("transition"):
+                transition = copy.deepcopy(source_transition)
+                service = transition.attrib.pop("mlt_service", None)
+                if transition.get("in") is not None:
+                    transition.set("in", _time(int(transition.get("in")), fps))
+                if transition.get("out") is not None:
+                    transition.set("out", _time(int(transition.get("out")), fps))
+                if service:
+                    _prop(transition, "mlt_service", service)
+                    _prop(transition, "kdenlive_id", service)
+                tractor.append(transition)
 
     sequence = ET.SubElement(root, "tractor", id=sequence_id, **{"in": "0", "out": end})
     for key, val in (("kdenlive:uuid", sequence_id), ("kdenlive:clipname", "Rafiei edit"),
@@ -202,6 +226,14 @@ def build_kdenlive(mlt_path: Path, out_path: Path | None = None) -> Path:
                      ("kdenlive:docproperties.profile", "custom"),
                      ("kdenlive:docproperties.audioChannels", 2),
                      ("xml_retain", 1)):
+        _prop(bin_playlist, key, val)
+    # The native subtitle filter is intentionally represented by sidecars in
+    # Kdenlive, where it can be imported as an editable subtitle track. Keep
+    # the selected font's stable identity and bundled job asset in the project
+    # metadata so the user's choice survives project export and handoff.
+    for key, val in font_metadata.items():
+        _prop(bin_playlist, key, val)
+    for key, val in style_metadata.items():
         _prop(bin_playlist, key, val)
     ET.SubElement(bin_playlist, "entry", producer=sequence_id, **{"in": "0", "out": end})
     for old_id in ids:

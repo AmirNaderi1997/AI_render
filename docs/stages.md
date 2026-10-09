@@ -8,13 +8,13 @@
 ## مرحله ۰ — آماده‌سازی
 
 **کارها**
-- نصب روی سیستم تدوین (مک): `brew install ffmpeg mlt`، نصب Kdenlive از kdenlive.org، `pip install faster-whisper`، Python 3.11+ و Node 20+
+- نصب روی سیستم تدوین (مک): `brew install ffmpeg mlt`، `pip install faster-whisper`، Python 3.11+ و Node 20+. ویرایشگر اصلی Premiere Pro است (اختیاری: Kdenlive به عنوان جایگزین)
 - ساخت پوشه‌ی `rafiei-ai-editor/` با ساختار `raw/ music/ sfx/ broll/ presets/ exports/ references/`
 - جمع کردن ۱۰ تا ۲۰ ریل قبلی که ادیتشان را دوست داری در `references/`
 - چند موزیک، whoosh/pop و B-roll اولیه در کتابخانه
 - نصب فونت کپشن (مثلاً Vazirmatn برای فارسی، Montserrat برای انگلیسی)
 
-**تمام است وقتی:** `melt --version`، `ffmpeg -version` و `python -c "import faster_whisper"` کار می‌کنند و Kdenlive باز می‌شود.
+**تمام است وقتی:** `melt --version`، `ffmpeg -version` و `python -c "import faster_whisper"` کار می‌کنند و Premiere Pro نصب است.
 
 ---
 
@@ -31,14 +31,14 @@
 - **UI پایه:**
   - صفحه‌ی **New Reel**: آپلود ویدیوی خام + آپلود/پیست `plan.json`
   - صفحه‌ی **Plan Review** نسخه‌ی ساده: ویرایشگر JSON با اعتبارسنجی و تایم‌لاین نمایشی فقط‌خواندنی
-  - صفحه‌ی **Render**: دکمه‌ی Render، نوار پیشرفت، پخش MP4، دانلود، دکمه‌ی Open in Kdenlive
+  - صفحه‌ی **Render**: دکمه‌ی Render، نوار پیشرفت، پخش MP4، دانلود، باز کردن در Premiere Pro
 - تست‌ها: هر ویژگی یک plan نمونه و بررسی خودکار خروجی با `ffprobe` (مدت، رزولوشن، وجود صدا)
 
 **نقطه‌ی شروع:** کد تست‌شده در [`proof/`](proof/README.md) (`build_mlt.py` و `plan.json`) که همین مسیر را برای همه‌ی ۷ ویژگی نشان داده است.
 
 **تمام است وقتی**
 - یک ویدیوی واقعی خودت با یک plan دستی به ریل 1080x1920 با هر ۷ ویژگی تبدیل شود
-- همان پروژه در Kdenlive باز شود
+- همان پروژه در Premiere Pro باز شود (یا Kdenlive به عنوان جایگزین)
 - کل کار از UI و بدون ترمینال انجام شود
 
 ---
@@ -101,13 +101,39 @@
 
 ---
 
+---
+
+## مرحله ۶ — Content Creator: تولید محتوای اینستاگرام با AI
+
+**هدف:** کاربر با یک prompt متنی، ریل، پست یا استوری اینستاگرام تولید کند — بدون نیاز به ویدیوی خام.
+
+**کارها**
+- تعریف فرمت‌های محتوا (Reel 9:16, Post 1:1, Story 9:16) — `engine/content_types.py`
+- تولید Storyboard از prompt با LLM — `brain/storyboard.py`
+- آداپتور provider-neutral برای تولید تصویر/ویدیو با AI — `brain/media_provider.py`
+- ارکستراتور Content Creator — `brain/content_creator.py`
+- LocalFixtureProvider برای تست بدون API key
+- ذخیره provenance (هزینه، منبع، generation ID) برای هر asset تولیدشده
+- **UI:**
+  - صفحه‌ی **Content Creator**: prompt + انتخاب نوع محتوا + زبان + استایل + provider
+  - بازبینی Storyboard: کارت‌های صحنه با متن قابل ویرایش، ترتیب‌دهی، حذف
+  - تخمین هزینه قبل از تولید
+  - دکمه‌ی Approve & Generate با نوار پیشرفت
+  - برای پست: دانلود تصویر علاوه بر MP4
+- تست‌ها: تولید storyboard، fixture provider، تبدیل به EditPlan، flow کامل
+
+**تمام است وقتی:** یک نمونه از هر فرمت (Reel، Post، Story) با fixture provider از prompt تا خروجی نهایی برسد، متن فارسی دقیق با typesetting قطعی باشد، و jobهای قبلی (آپلود ویدیو) بدون تغییر کار کنند.
+
+---
+
 ## خلاصه
 
 | مرحله | ورودی | خروجی | UI اضافه‌شده |
 |---|---|---|---|
 | ۰ | — | محیط آماده | — |
-| ۱ | ویدیو + plan دستی | MP4 + پروژه‌ی Kdenlive | New Reel، JSON editor، Render |
+| ۱ | ویدیو + plan دستی | MP4 + پروژه‌ی Premiere Pro | New Reel، JSON editor، Render |
 | ۲ | فقط ویدیو + دستور | plan خودکار | ترنسکریپت و تایم‌لاین قابل ویرایش |
 | ۳ | + کتابخانه | assets خودکار | Library |
 | ۴ | خروجی v1 | v2 اصلاح‌شده | Render & QC |
-| ۵ | ریل‌های مرجع | استایل شخصی | Style |
+| ۵ | ریل‌های مرجع | استایل شخصی | Style Learner |
+| ۶ | prompt متنی | ریل/پست/استوری اینستاگرام | Content Creator |
