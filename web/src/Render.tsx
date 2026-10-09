@@ -4,7 +4,8 @@ import { api, type MusicStatus } from "./api";
 import { PremiereCard } from "./PremiereCard";
 import { AuthenticatedMedia, useAuthenticatedMediaUrl } from "./AuthenticatedMedia";
 import QCReview from "./QCReview";
-import { LoadingState, friendlyError } from "./ui";
+import { Breadcrumbs, JobWorkflow, LoadingState, NextStep, friendlyError } from "./ui";
+import { completeDenoise, trackDenoise } from "./taskNotifications";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "error", "cancelled", "done", "ready", "skipped"]);
 
@@ -26,6 +27,8 @@ function DenoiseCard({ id }: { id: string }) {
     polling.current = true;
     return api.getDenoiseStatus(id).then(s => {
       setState(s);
+      if (s.status === "processing") trackDenoise(id);
+      if (s.status === "ready") completeDenoise(id);
       setStatusError("");
       if (s.status === "ready" && !samplesRequested.current) {
         samplesRequested.current = true;
@@ -65,6 +68,7 @@ function DenoiseCard({ id }: { id: string }) {
     setLoading(true);
     try {
       await api.triggerDenoise(id, level, preserveVoice);
+      trackDenoise(id);
       poll();
     } catch (e) { setError(friendlyError(e, "start audio cleanup")); }
     finally { setLoading(false); }
@@ -88,6 +92,7 @@ function DenoiseCard({ id }: { id: string }) {
     setLoading(true);
     try {
       await api.triggerDenoise(id, level, preserveVoice);
+      trackDenoise(id);
       poll();
     } catch (e) { setError(friendlyError(e, "reprocess the audio")); }
     finally { setLoading(false); }
@@ -361,6 +366,7 @@ export default function Render() {
   const [downloadError, setDownloadError] = React.useState("");
   const [rerenderError, setRerenderError] = React.useState("");
   const [plan, setPlan] = React.useState<any>(null);
+  const [job, setJob] = React.useState<import("./api").Job | null>(null);
   const [planError, setPlanError] = React.useState("");
   const currentJobId = React.useRef(id);
   currentJobId.current = id;
@@ -396,7 +402,7 @@ export default function Render() {
     let active = true;
     const isCurrent = () => active && !controller.signal.aborted && currentJobId.current === id;
     api.getJob(id, controller.signal).then(j => {
-      if (isCurrent() && j.plan) setPlan(j.plan);
+      if (isCurrent()) { setJob(j); if (j.plan) setPlan(j.plan); }
     }).catch(e => {
       if (isCurrent()) setPlanError(friendlyError(e, "load export details"));
     });
@@ -420,15 +426,16 @@ export default function Render() {
       {planError && <p className="errors" role="alert">{planError}</p>}
       {downloadError && <p className="errors" role="alert">{downloadError}</p>}
       {rerenderError && <p className="errors" role="alert">{rerenderError}</p>}
+      <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: job?.raw_name || `Job ${id}`, to: `/jobs/${id}` }, { label: "Render & Export" }]} />
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-        <a href={`/jobs/${id}`} style={{ color: "var(--text-tertiary)", fontSize: 13 }}>&larr; Back to plan</a>
-        <span style={{ color: "var(--text-tertiary)" }}>/</span>
         <h1 style={{ marginBottom: 0 }}>Render</h1>
         <span className={`status-badge ${s.status === "done" ? "done" : s.status === "error" ? "error" : "running"}`}
           style={{ marginLeft: "auto" }}>
           {s.status}
         </span>
       </div>
+      <JobWorkflow job={job} current={finished ? 4 : 3} renderStatus={s.status} />
+      {finished && <NextStep>Review the export below, then download it or open it in Premiere.</NextStep>}
 
       <div className="card">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -455,7 +462,7 @@ export default function Render() {
       <MusicCard id={id} renderStatus={s.status} renderOutput={s.output} />
 
       {finished && s.output && (
-        <div className="card">
+        <div className="card" id="export">
           <div className="section-header">
             <h2>Latest Export</h2>
             <span className="muted">{s.output}</span>

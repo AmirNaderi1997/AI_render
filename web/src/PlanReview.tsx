@@ -6,7 +6,7 @@ import { PremiereCard } from "./PremiereCard";
 import { Timeline, outputToRaw, segmentOutputMarks } from "./Timeline";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import { MusicPicker } from "./MusicPicker";
-import { LoadingState, friendlyError } from "./ui";
+import { Breadcrumbs, JobWorkflow, LoadingState, NextStep, friendlyError } from "./ui";
 
 type Tab = "visual" | "json";
 type WordEdit = { text: string; start: number; end: number };
@@ -344,11 +344,10 @@ export default function PlanReview() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-        <a href="/jobs" style={{ color: "var(--text-tertiary)", fontSize: 13 }}>&larr; Jobs</a>
-        <span style={{ color: "var(--text-tertiary)" }}>/</span>
-        <h1 style={{ marginBottom: 0 }}>Job {job.id}</h1>
-      </div>
+      <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: job.raw_name || `Job ${job.id}` }, { label: "Plan Review" }]} />
+      <h1>{job.raw_name || `Job ${job.id}`}</h1>
+      <JobWorkflow job={job} current={2} />
+      {parsedPlan && !isGenerating && <NextStep>Review the edit plan, then start a preview render to check the result.</NextStep>}
 
       {parsedPlan?.style_profile && (
         <div style={{
@@ -378,7 +377,7 @@ export default function PlanReview() {
       {detailErrors.length > 0 && <div className="errors" role="alert">{detailErrors.map((message, i) => <p key={i}>{message}</p>)}</div>}
       {validating && <p className="muted" role="status">Checking edit plan…</p>}
       {genStatus?.status === "error" && (
-        <div className="errors">Generation failed: {genStatus.message}</div>
+        <div className="errors" role="alert">Generation failed: {genStatus.message} <a href="/new">Start a new reel</a></div>
       )}
 
       {(genStatus?.cost_usd > 0 || genStatus?.asr_cost_usd > 0) && (

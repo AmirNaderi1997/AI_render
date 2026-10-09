@@ -80,15 +80,19 @@ export default function StyleLibrary() {
   async function removeDraft(item: StyleDraft) {
     if (!window.confirm(`Delete the draft "${item.name}"?`)) return;
     setBusy(true); setError("");
+    const snapshot = data;
+    setData(current => ({ ...current, drafts: current.drafts.filter(draftItem => draftItem.id !== item.id) }));
     try { await api.deleteStyleDraft(item.id); if (draft?.id === item.id) setDraft(null); await refresh(); }
-    catch (e: any) { setError(friendlyError(e, "delete this draft")); }
+    catch (e: any) { setData(snapshot); setError(friendlyError(e, "delete this draft")); }
     finally { setBusy(false); }
   }
   async function removeProfile(item: StyleProfile) {
     if (!window.confirm(`Remove "${item.name} · v${item.version}" from the active style library? Existing jobs will keep their pinned version.`)) return;
     setBusy(true); setError("");
+    const snapshot = data;
+    setData(current => ({ ...current, profiles: current.profiles.filter(profile => profile.style_id !== item.style_id || profile.version !== item.version) }));
     try { await api.deleteStyleProfile(item.style_id, item.version); await refresh(); }
-    catch (e: any) { setError(friendlyError(e, "remove this style")); }
+    catch (e: any) { setData(snapshot); setError(friendlyError(e, "remove this style")); }
     finally { setBusy(false); }
   }
   async function forkProfile(item: StyleProfile) {

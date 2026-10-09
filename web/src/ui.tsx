@@ -1,4 +1,60 @@
 import React from "react";
+import { Link } from "react-router-dom";
+import type { Job } from "./api";
+
+export function Breadcrumbs({ items }: { items: { label: string; to?: string }[] }) {
+  return <nav className="breadcrumbs" aria-label="Breadcrumb"><ol>{items.map((item, index) =>
+    <li key={`${item.label}-${index}`}>{item.to ? <Link to={item.to}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</li>
+  )}</ol></nav>;
+}
+
+type StepStatus = "pending" | "active" | "completed" | "failed";
+const workflow = ["Upload", "Plan", "Review", "Render", "Export"] as const;
+
+export function JobWorkflow({ job, current, renderStatus }: { job?: Job | null; current: number; renderStatus?: string }) {
+  const generated = !!job?.plan || job?.generate?.status === "done";
+  const generationFailed = job?.generate?.status === "error";
+  const rendering = renderStatus || job?.render?.status || "idle";
+  const renderDone = rendering === "done";
+  const renderFailed = rendering === "error" || rendering === "failed";
+  const statuses: StepStatus[] = workflow.map((_, index) => {
+    if (index === 0) return job ? "completed" : "active";
+    if (index === 1) return generationFailed ? "failed" : generated ? "completed" : job ? "active" : "pending";
+    if (index === 2) return generated ? current > 2 ? "completed" : "active" : "pending";
+    if (index === 3) return renderFailed ? "failed" : renderDone ? "completed" : current >= 3 ? "active" : "pending";
+    return renderDone ? current === 4 ? "active" : "completed" : "pending";
+  });
+  const id = job?.id;
+  const links = ["/new", id ? `/jobs/${id}` : "", id ? `/jobs/${id}` : "", id ? `/jobs/${id}/render` : "", id && renderDone ? `/jobs/${id}/render#export` : ""];
+  return <div className="workflow" aria-label="Job progress"><ol>{workflow.map((label, index) => {
+    const status = statuses[index];
+    const content = <><span className="workflow-number" aria-hidden="true">{status === "completed" ? "✓" : index + 1}</span><span>{label}</span><small>{status}</small></>;
+    return <li key={label} className={`workflow-${status}`}>{links[index] && status !== "pending" && status !== "failed" ?
+      <Link to={links[index]} aria-current={index === current ? "step" : undefined}>{content}</Link> : <span aria-current={index === current ? "step" : undefined}>{content}</span>}</li>;
+  })}</ol></div>;
+}
+
+export function NextStep({ children }: { children: React.ReactNode }) {
+  return <div className="next-step"><strong>What’s next?</strong><div>{children}</div></div>;
+}
+
+export function notify(message: string) { window.dispatchEvent(new CustomEvent<string>("ai-render:toast", { detail: message })); }
+
+export function ToastHost() {
+  const [items, setItems] = React.useState<{ id: number; text: string }[]>([]);
+  React.useEffect(() => {
+    const onToast = (event: Event) => {
+      const id = Date.now() + Math.random();
+      setItems(current => [...current, { id, text: (event as CustomEvent<string>).detail }]);
+      window.setTimeout(() => setItems(current => current.filter(item => item.id !== id)), 6000);
+    };
+    window.addEventListener("ai-render:toast", onToast);
+    return () => window.removeEventListener("ai-render:toast", onToast);
+  }, []);
+  return <div className="toast-stack" aria-live="polite" aria-atomic="false">{items.map(item =>
+    <div className="toast" key={item.id}><span>{item.text}</span><button className="toast-close" onClick={() => setItems(current => current.filter(i => i.id !== item.id))} aria-label="Dismiss notification">×</button></div>
+  )}</div>;
+}
 
 /** Keep operational details in logs while giving people a useful next step. */
 export function friendlyError(error: unknown, action = "complete this action"): string {

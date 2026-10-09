@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from "re
 import { isAuthenticated, getUser, clearToken, restoreSession } from "./auth";
 import Login from "./Login";
 import { JobCacheProvider } from "./JobCache";
-import { LoadingState } from "./ui";
+import { LoadingState, ToastHost } from "./ui";
 
 const NewReel = React.lazy(() => import("./NewReel"));
 const PlanReview = React.lazy(() => import("./PlanReview"));
@@ -101,7 +101,7 @@ function AuthenticatedApp() {
   return (
     <>
       <a className="skip-link" href="#main-content">Skip to content</a>
-      <nav aria-label="Main navigation">
+      <nav className="app-nav" aria-label="Main navigation">
         <div className="nav-brand">
           <div className="nav-brand-icon">R</div>
           <span className="nav-brand-text">AI Render</span>
@@ -171,6 +171,7 @@ function AuthenticatedApp() {
           <Route path="*" element={<Navigate to="/new" replace />} />
         </Routes>
       </main>
+      <ToastHost />
     </>
   );
 }

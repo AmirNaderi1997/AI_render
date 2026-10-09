@@ -4,7 +4,7 @@ import { api, FontEntry, LibraryAsset, StyleProfile } from "./api";
 import { FontLibrary } from "./FontLibrary";
 import { StylePicker } from "./StyleLibrary";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
-import { friendlyError } from "./ui";
+import { friendlyError, JobWorkflow, NextStep } from "./ui";
 
 function fmtSize(n: number) {
   return n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : (n / 1e6).toFixed(1) + " MB";
@@ -41,8 +41,13 @@ export default function NewReel() {
   const [generating, setGenerating] = React.useState(false);
   const [genStatus, setGenStatus] = React.useState<any>(null);
   const [err, setErr] = React.useState<string | null>(null);
+  const [videoError, setVideoError] = React.useState("");
   const [over, setOver] = React.useState(false);
   const [jobId, setJobId] = React.useState<string | null>(null);
+  const planJsonError = React.useMemo(() => {
+    if (!planText.trim() || planFile) return false;
+    try { JSON.parse(planText); return false; } catch { return true; }
+  }, [planText, planFile]);
 
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -100,9 +105,9 @@ export default function NewReel() {
   function pick(f?: File | null) {
     if (!f) return;
     if (!(f.type.startsWith("video/") || /\.(mp4|mov)$/i.test(f.name))) {
-      setErr(`"${f.name}" is not a video file (.mp4 / .mov)`); return;
+      setVideoError(`"${f.name}" is not a video file (.mp4 / .mov).`); return;
     }
-    setErr(null); setVideo(f);
+    setErr(null); setVideoError(""); setVideo(f);
   }
 
   async function uploadMusicToJob(jobId: string) {
@@ -119,7 +124,7 @@ export default function NewReel() {
   }
 
   async function onCreate() {
-    if (!video) { setErr("Select a raw video first"); return; }
+    if (!video) { setVideoError("Select a raw video first."); return; }
     setBusy(true); setErr(null);
     try {
       const plan = planFile ?? (planText.trim() ? planText : undefined);
@@ -134,7 +139,7 @@ export default function NewReel() {
   }
 
   async function onGenerate() {
-    if (!video) { setErr("Select a raw video first"); return; }
+    if (!video) { setVideoError("Select a raw video first."); return; }
     setBusy(true); setErr(null);
     try {
       const { job } = await api.createJob(video);
@@ -162,8 +167,10 @@ export default function NewReel() {
   return (
     <div>
       <h1>New Reel</h1>
-      {optionsLoading && <p className="muted" role="status">Loading fonts and saved music…</p>}
+      <JobWorkflow current={0} />
+      {optionsLoading && <div className="ui-skeleton" role="status" aria-label="Loading fonts and saved music"><span /><span /></div>}
       {optionsError && <p className="errors" role="alert">{optionsError}</p>}
+      {video && <NextStep>Choose a style and either generate a plan or upload one below.</NextStep>}
 
       {/* Step 1 - Video */}
       <div className="card">
@@ -199,8 +206,10 @@ export default function NewReel() {
           )}
         </label>
         <input id="vid" ref={inputRef} type="file" tabIndex={-1}
+          aria-invalid={!!videoError} aria-describedby={videoError ? "video-error" : undefined}
           style={{ position: "absolute", width: 1, height: 1, opacity: 0, overflow: "hidden" }}
           onChange={e => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+        {videoError && <p id="video-error" className="errors" role="alert">{videoError}</p>}
       </div>
 
       {/* Step 2 - Style */}
@@ -393,13 +402,14 @@ export default function NewReel() {
           <textarea rows={6} aria-label="Paste edit plan JSON" placeholder='{"canvas": ..., "segments": [...], ...}'
             value={planText} onChange={e => setPlanText(e.target.value)}
             style={{ marginTop: 10 }} />
+          {planJsonError && <p className="errors" role="alert">The pasted plan is not valid JSON. Check its formatting before creating the job.</p>}
         </div>
       </div>
 
       {err && <div className="errors" role="alert">{err}</div>}
 
       <div className="action-bar">
-        <button onClick={onCreate} disabled={busy || !video} className="secondary">
+        <button onClick={onCreate} disabled={busy || !video || planJsonError} className="secondary">
           {busy ? "Creating..." : "Create (with manual plan)"}
         </button>
       </div>

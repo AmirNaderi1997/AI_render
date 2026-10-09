@@ -98,10 +98,13 @@ export default function Library() {
   async function handleDelete(asset: LibraryAsset) {
     if (!confirm(`Delete ${asset.filename}?`)) return;
     setMutating(true);
+    const snapshot = data;
+    setData(current => current ? { ...current, counts: { ...current.counts, [asset.category]: Math.max(0, current.counts[asset.category] - 1) }, assets: current.assets.filter(item => !(item.category === asset.category && item.filename === asset.filename)) } : current);
     try {
       await api.deleteLibraryAsset(asset.category, asset.filename);
       await load();
     } catch (e: any) {
+      setData(snapshot);
       setError(friendlyError(e, "delete this asset"));
     } finally { setMutating(false); }
   }
@@ -143,7 +146,7 @@ export default function Library() {
         </button>
       </div>
 
-      {error && <div className="error-box" role="alert">{error}</div>}
+      {error && <div className="error-box" role="alert">{error} <button className="secondary" onClick={() => { setError(""); void load(); }}>Retry loading</button></div>}
       {mutating && <p className="muted" role="status">Updating asset library…</p>}
 
       {/* Category counts */}
@@ -232,6 +235,7 @@ export default function Library() {
       {editAsset && (
         <div className="modal-overlay" onClick={() => setEditAsset(null)} onKeyDown={e => { if (e.key === "Escape") setEditAsset(null); }}>
           <div className="modal" ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="asset-edit-title" onClick={e => e.stopPropagation()}>
+            <button type="button" className="modal-close secondary" onClick={() => setEditAsset(null)} aria-label="Close editor">×</button>
             <h3 id="asset-edit-title">Edit: {editAsset.filename}</h3>
             <label htmlFor="asset-edit-tags">Tags (comma-separated)</label>
             <input id="asset-edit-tags" autoFocus value={editTags} onChange={e => setEditTags(e.target.value)} />

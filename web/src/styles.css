@@ -54,6 +54,12 @@
 
   /* Layout */
   --nav-width: 260px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -116,7 +122,7 @@ a:hover { color: #c4b5fd; }
    Navigation — Sidebar
    ═══════════════════════════════════════════ */
 
-nav {
+.app-nav {
   position: fixed;
   top: 0;
   left: 0;
@@ -172,7 +178,7 @@ nav {
   flex: 1;
 }
 
-nav a {
+.app-nav a {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -186,17 +192,17 @@ nav a {
   position: relative;
 }
 
-nav a:hover {
+.app-nav a:hover {
   color: var(--text);
   background: rgba(255,255,255,0.04);
 }
 
-nav a.active {
+.app-nav a.active {
   color: white;
   background: var(--accent-soft);
 }
 
-nav a.active::before {
+.app-nav a.active::before {
   content: '';
   position: absolute;
   left: 0;
@@ -219,7 +225,7 @@ nav a.active::before {
   flex-shrink: 0;
 }
 
-nav a.active .nav-icon { opacity: 1; }
+.app-nav a.active .nav-icon { opacity: 1; }
 
 .nav-footer {
   padding: 16px 22px;
@@ -360,8 +366,8 @@ button:disabled {
 }
 
 button.secondary {
-  background: var(--surface);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text);
   border: 1px solid var(--border-strong);
   box-shadow: none;
 }
@@ -372,6 +378,14 @@ button.secondary:hover {
   border-color: rgba(255,255,255,0.15);
   box-shadow: var(--shadow-sm);
 }
+
+button.danger, .danger-sm {
+  background: var(--error-soft);
+  color: var(--error);
+  border: 1px solid rgba(248,113,113,.3);
+  box-shadow: none;
+}
+button.danger:hover, .danger-sm:hover { background: rgba(248,113,113,.2); color: #fff; }
 
 /* ─────────────── Inputs ─────────────── */
 
@@ -547,6 +561,7 @@ p.errors, span.errors {
 
 video {
   max-width: 100%;
+  height: auto;
   border-radius: var(--radius-md);
   background: black;
   box-shadow: var(--shadow-md);
@@ -1120,7 +1135,7 @@ video {
 @media (max-width: 900px) {
   :root { --nav-width: 0px; }
 
-  nav {
+  .app-nav {
     position: fixed;
     bottom: 0;
     top: auto;
@@ -1150,7 +1165,7 @@ video {
     justify-content: space-around;
   }
 
-  nav a {
+  .app-nav a {
     flex-direction: column;
     gap: 4px;
     padding: 8px 12px;
@@ -1159,7 +1174,7 @@ video {
     min-width: 60px;
   }
 
-  nav a.active::before {
+  .app-nav a.active::before {
     display: none;
   }
 
@@ -1345,14 +1360,14 @@ video {
   cursor: pointer;
 }
 .btn-sm:hover { background: var(--surface-active); color: var(--text); }
-.btn-danger { border-color: var(--error-soft); }
-.btn-danger:hover { background: var(--error-soft); color: var(--error); }
+.btn-danger { border-color: rgba(248,113,113,.3); background:var(--error-soft); color:var(--error); }
+.btn-danger:hover { background: rgba(248,113,113,.2); color: #fff; }
 .btn-secondary {
   padding: 8px 16px;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
   cursor: pointer;
 }
 .btn-secondary:hover { background: var(--surface-hover); }
@@ -1789,7 +1804,7 @@ main { min-width: 0; }
 .nav-links a[aria-current="page"] { color: var(--text); }
 
 @media (max-width: 900px) {
-  nav { scrollbar-width: thin; }
+  .app-nav { scrollbar-width: thin; }
   .nav-links { justify-content: flex-start; width: max-content; min-width: 100%; }
   .nav-user { display: flex; padding: 4px 8px; }
   .nav-user-name { display: none; }
@@ -1814,3 +1829,37 @@ main { min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Shared job journey */
+.breadcrumbs { display:block; position:static; width:auto; height:auto; overflow:visible; background:none; border:0; padding:0; margin:0 0 var(--space-3); }
+.breadcrumbs ol { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; list-style:none; padding:0; margin:0; color:var(--text-tertiary); font-size:12px; }
+.breadcrumbs li + li::before { content:"/"; margin-right:var(--space-2); color:var(--text-tertiary); }
+.breadcrumbs a { color:var(--text-secondary); }
+.breadcrumbs [aria-current="page"] { color:var(--text); }
+.workflow { margin:var(--space-4) 0 var(--space-6); max-width:100%; overflow-x:auto; scrollbar-width:thin; }
+.workflow ol { display:grid; grid-template-columns:repeat(5,minmax(112px,1fr)); gap:var(--space-2); min-width:560px; list-style:none; padding:0; margin:0; }
+.workflow li > a,.workflow li > span { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); min-height:62px; padding:var(--space-2) var(--space-3); border-radius:var(--radius-sm); border:1px solid var(--border-strong); background:var(--surface); color:var(--text-secondary); font-size:13px; font-weight:650; }
+.workflow li small { flex-basis:100%; margin-left:30px; color:var(--text-tertiary); font-size:10px; text-transform:capitalize; }
+.workflow-number { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--surface-active); color:var(--text); font-size:11px; flex:none; }
+.workflow-completed .workflow-number { background:var(--success-soft); color:var(--success); }
+.workflow-active > a,.workflow-active > span { border-color:var(--accent); background:var(--accent-soft); color:var(--text); }
+.workflow-failed > span { border-color:var(--error); color:var(--error); }
+.workflow-pending > span { opacity:.55; cursor:not-allowed; }
+.next-step { display:flex; align-items:center; gap:var(--space-3); flex-wrap:wrap; margin:0 0 var(--space-6); padding:var(--space-3) var(--space-4); background:var(--accent-soft); border:1px solid rgba(99,102,241,.25); border-radius:var(--radius-md); color:var(--text-secondary); }
+.next-step strong { color:var(--text); }
+.toast-stack { position:fixed; z-index:1000; right:var(--space-4); bottom:var(--space-4); display:grid; gap:var(--space-2); width:min(360px,calc(100vw - 32px)); pointer-events:none; }
+.toast { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); padding:var(--space-3) var(--space-4); background:var(--surface-active); border:1px solid var(--border-strong); border-left:3px solid var(--success); border-radius:var(--radius-md); box-shadow:var(--shadow-lg); pointer-events:auto; }
+.toast-close,.toast-close:hover { background:transparent; color:var(--text-secondary); border:0; box-shadow:none; padding:0 2px; font-size:20px; transform:none; }
+.jobs-search { display:grid; gap:var(--space-2); max-width:360px; margin:var(--space-4) 0; color:var(--text-secondary); }
+.job-thumb { width:56px; height:56px; flex:none; border-radius:var(--radius-sm); object-fit:cover; background:var(--bg-elevated); }
+.job-thumb-placeholder { display:grid; place-items:center; color:var(--text-tertiary); }
+.modal-overlay { position:fixed; inset:0; z-index:500; display:grid; place-items:center; padding:var(--space-4); background:rgba(5,6,12,.72); }
+.modal { position:relative; width:min(560px,100%); max-height:calc(100dvh - 32px); overflow-y:auto; display:grid; gap:var(--space-2); padding:var(--space-6); background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); }
+.modal h3 { padding-right:36px; }
+.modal label { margin-top:var(--space-2); }
+.modal .modal-close { position:absolute; top:var(--space-3); right:var(--space-3); min-width:32px; padding:3px 8px; font-size:20px; }
+@media (max-width:600px) { .modal-overlay { align-items:end; padding:0 0 calc(60px + env(safe-area-inset-bottom)); } .modal { width:100%; max-height:calc(100dvh - 76px); border-radius:var(--radius-xl) var(--radius-xl) 0 0; padding:var(--space-4); } }
+.job-meta { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:900px) { .toast-stack { bottom:calc(82px + env(safe-area-inset-bottom)); } }
+@media (max-width:600px) { .job-item { flex-wrap:wrap; gap:var(--space-2); } .job-item .status-badge { margin-left:auto; } .workflow { margin-right:-16px; padding-right:16px; } }
+@media (max-width:600px) { .library-counts { max-width:100%; overflow-x:auto; padding-bottom:var(--space-2); scrollbar-width:thin; } .library-tab { flex:0 0 auto; min-width:150px; padding:var(--space-3); } }

@@ -6,6 +6,8 @@ main:has(.hm-shell){min-width:0}.hm-shell{--hm-bg:#11131d;--hm-panel:#191c29;--h
 .hm-shell h3{color:var(--hm-text);text-transform:none;font-weight:700;letter-spacing:-.015em}.hm-shell label{align-items:stretch;text-align:left}
 .hm-heatmap{overflow-x:auto;padding-bottom:4px}.hm-heatmap-head,.hm-heatmap-row{min-width:660px;grid-template-columns:52px repeat(24,minmax(18px,1fr))}.hm-heatmap-row span{height:22px}
 .hm-advisor-layout>div,.hm-tool{min-width:0}.hm-heatmap{max-width:100%}
+.hm-sheet-toggle{display:none!important}
+@media(max-width:650px){.hm-mobile-sheet{min-width:0;border:1px solid var(--hm-border);border-radius:18px 18px 12px 12px;background:var(--hm-panel);padding:12px 14px;box-shadow:0 -8px 26px rgba(0,0,0,.18)}.hm-mobile-sheet .hm-sheet-toggle{display:flex!important;width:100%;justify-content:space-between;background:transparent!important;color:var(--hm-text)!important;border:0!important;box-shadow:none!important;padding:6px 2px!important;font-size:13px!important}.hm-mobile-sheet:not(.is-open)>:not(.hm-sheet-toggle){display:none!important}.hm-mobile-sheet.is-open{padding-bottom:18px}.hm-mobile-sheet.is-open .hm-sheet-toggle{margin-bottom:12px}}
 
 /* Shared feedback and compact-screen polish */
 .hm-shell { --hm-violet: var(--accent-hover); }
