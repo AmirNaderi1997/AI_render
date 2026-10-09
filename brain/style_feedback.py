@@ -149,12 +149,17 @@ def compute_plan_diff(original: dict, edited: dict) -> list[dict]:
     return events
 
 
-def aggregate_all_feedback() -> dict:
-    """Aggregate feedback across all jobs. Returns a summary dict."""
+def aggregate_all_feedback(job_dirs: Optional[list[Path]] = None, *, persist: bool = True) -> dict:
+    """Aggregate feedback across jobs (all jobs by default). Returns a summary dict.
+
+    Only the all-jobs summary is cached to disk; scoped summaries pass persist=False.
+    """
     all_events: list[dict] = []
     jobs_with_feedback = 0
 
-    for job_dir in sorted(JOBS_ROOT.iterdir()):
+    if job_dirs is None:
+        job_dirs = sorted(JOBS_ROOT.iterdir())
+    for job_dir in job_dirs:
         if not job_dir.is_dir():
             continue
         feedback_path = job_dir / "feedback.jsonl"
@@ -212,9 +217,10 @@ def aggregate_all_feedback() -> dict:
         "caption_edit_count": caption_edits,
     }
 
-    FEEDBACK_SUMMARY_PATH.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    if persist:
+        FEEDBACK_SUMMARY_PATH.write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     return summary
 
 

@@ -1,11 +1,18 @@
 """Style API routes."""
 from __future__ import annotations
 
+import hashlib
+import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from app import jobs as jobstore
+from app import style_store
 from app.job_access import get_job_for_request
+
+log = logging.getLogger(__name__)
+MAX_REEL_BYTES = 500_000_000
 
 router = APIRouter(prefix="/style", tags=["style"])
 legacy_router = APIRouter(tags=["style"])
@@ -96,74 +103,100 @@ def get_style_evidence(asset: str):
     return FileResponse(path)
 
 
-@router.post("/analyze")
-async def analyze_reference_reel(file: UploadFile = File(...)):
-    """Upload a reference reel, run analysis, return StyleProfile."""
-    from brain.style_learner import analyze_reference
-    from brain.style_profile import LEARNED_PROFILES_DIR
+def _uid(request: Request) -> str:
+    user = getattr(request.state, "user", None)
+    if user is None:
+        raise HTTPException(401, "Authentication required")
+    return str(user.id)
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(422, "Reference reel upload is empty")
-    if len(content) > 500_000_000:
-        raise HTTPException(413, "reference reel must be at most 500 MB")
-    suffix = Path(file.filename or "reel.mp4").suffix.lower()
-    if suffix not in {".mp4", ".mov", ".mkv", ".webm", ".m4v"}:
-        raise HTTPException(422, f"unsupported video format: {suffix}")
 
-    refs_dir = LEARNED_PROFILES_DIR / "references"
-    refs_dir.mkdir(parents=True, exist_ok=True)
-
-    import hashlib
-    digest = hashlib.sha256(content).hexdigest()[:16]
-    reel_path = refs_dir / f"ref-{digest}{suffix}"
-    reel_path.write_bytes(content)
-
-    try:
-        profile = analyze_reference(reel_path)
-    except Exception as exc:
-        raise HTTPException(500, f"analysis failed: {exc}")
-
-    # Save individual analysis
-    analysis_path = refs_dir / f"ref-{digest}.json"
-    import json as _json
-    analysis_path.write_text(_json.dumps(profile, ensure_ascii=False, indent=2))
+def _rebuild(uid: str) -> dict | None:
+    """Rebuild the user's learned profile from stored analyses; remove it when none remain."""
+    from brain.style_profile import build_learned_profile
+    analyses = style_store.list_references(uid)
+    if not analyses:
+        style_store.delete_profile(uid)
+        return None
+    previous = style_store.load_profile(uid)
+    profile = build_learned_profile([{k: v for k, v in a.items() if k != "_file"} for a in analyses])
+    profile["enabled"] = previous.get("enabled", True) if previous else True
+    style_store.save_profile(uid, profile)
     return profile
 
 
-@router.get("/profile")
-def get_learned_style_profile():
-    """Get current merged profile with confidence per metric."""
-    from brain.style_profile import load_learned_profile, LEARNED_PROFILES_DIR
-    import json as _json
+def _analyze_and_store(uid: str, content: bytes, suffix: str, original_name: str) -> dict:
+    from brain.style_learner import analyze_reference
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    reel_path = style_store.refs_dir(uid) / f"ref-{digest}{suffix}"
+    existed = reel_path.exists()
+    reel_path.write_bytes(content)
+    try:
+        analysis = analyze_reference(reel_path)
+        analysis["source_file"] = Path(original_name).name[:200] or reel_path.name
+        style_store.add_reference(uid, digest, analysis)
+    except BaseException:
+        if not existed:
+            reel_path.unlink(missing_ok=True)
+        raise
+    return {**analysis, "_file": digest}
 
-    refs_dir = LEARNED_PROFILES_DIR / "references"
-    sample_count = len(list(refs_dir.glob("ref-*.json"))) if refs_dir.exists() else 0
-    profile = load_learned_profile()
+
+@router.post("/analyze")
+async def analyze_reference_reel(request: Request, file: UploadFile = File(...)):
+    """Upload a reference reel, analyze it, and store the analysis for the current user."""
+    uid = _uid(request)
+    suffix = Path(file.filename or "reel.mp4").suffix.lower()
+    if suffix not in style_store.VIDEO_SUFFIXES:
+        raise HTTPException(422, f"unsupported video format: {suffix or 'none'}")
+    chunks, size = [], 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+        if size > MAX_REEL_BYTES:
+            raise HTTPException(413, "reference reel must be at most 500 MB")
+        chunks.append(chunk)
+    if not size:
+        raise HTTPException(422, "Reference reel upload is empty")
+    try:
+        return await run_in_threadpool(_analyze_and_store, uid, b"".join(chunks), suffix, file.filename or "reel")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception:
+        log.exception("reference reel analysis failed")
+        raise HTTPException(500, "analysis failed; check that the file is a valid video")
+
+
+@router.get("/profile")
+def get_learned_style_profile(request: Request):
+    """Current merged profile with confidence per metric."""
+    uid = _uid(request)
+    sample_count = len(style_store.list_references(uid))
+    profile = style_store.load_profile(uid)
     if not profile:
         return {"active": False, "enabled": False, "metrics": {}, "confidence": {}, "sample_count": sample_count,
                 "few_shot_examples": [], "preset_overrides": {}}
-
+    learned = profile.get("learned_metrics", {})
     return {
-        "active": profile.get("learned_metrics", {}).get("sufficient", False),
+        "active": learned.get("sufficient", False),
         "enabled": profile.get("enabled", True),
-        "metrics": profile.get("learned_metrics", {}).get("metrics", {}),
-        "confidence": profile.get("learned_metrics", {}).get("confidence", {}),
+        "metrics": learned.get("metrics", {}),
+        "confidence": learned.get("confidence", {}),
         "sample_count": sample_count,
         "few_shot_examples": profile.get("few_shot_examples", []),
         "preset_overrides": profile.get("preset_overrides", {}),
-        "source_files": profile.get("learned_metrics", {}).get("source_files", []),
+        "source_files": learned.get("source_files", []),
     }
 
 
 @router.put("/profile")
-def update_learned_profile(body: dict):
+def update_learned_profile(body: dict, request: Request):
     """Manual override of any metric in the learned profile."""
-    from brain.style_profile import load_learned_profile, save_learned_profile
-
-    profile = load_learned_profile() or {
+    uid = _uid(request)
+    profile = style_store.load_profile(uid) or {
         "preset_overrides": {}, "learned_metrics": {}, "few_shot_examples": []
     }
+    for key in ("preset_overrides", "metrics"):
+        if key in body and not isinstance(body[key], dict):
+            raise HTTPException(422, f"{key} must be an object")
     if "preset_overrides" in body:
         profile["preset_overrides"] = body["preset_overrides"]
     if "metrics" in body:
@@ -174,70 +207,45 @@ def update_learned_profile(body: dict):
         if body["enabled"] and not profile.get("learned_metrics", {}).get("sufficient", False):
             raise HTTPException(409, "at least 3 references are required to enable learned style")
         profile["enabled"] = body["enabled"]
-    save_learned_profile(profile)
+    style_store.save_profile(uid, profile)
     return {"ok": True}
 
 
 @router.post("/rebuild")
-def rebuild_learned_profile():
-    """Rebuild the learned profile from all reference analyses."""
-    from brain.style_profile import (
-        LEARNED_PROFILES_DIR, build_learned_profile, save_learned_profile,
-    )
-    import json as _json
-
-    refs_dir = LEARNED_PROFILES_DIR / "references"
-    if not refs_dir.exists():
+def rebuild_learned_profile(request: Request):
+    """Rebuild the learned profile from all of the user's reference analyses."""
+    profile = _rebuild(_uid(request))
+    if profile is None:
         raise HTTPException(400, "no reference reels analyzed yet")
-
-    analyses = []
-    for p in sorted(refs_dir.glob("ref-*.json")):
-        try:
-            analyses.append(_json.loads(p.read_text()))
-        except Exception:
-            continue
-
-    if not analyses:
-        raise HTTPException(400, "no valid reference analyses found")
-
-    from brain.style_profile import load_learned_profile
-    previous = load_learned_profile()
-    profile = build_learned_profile(analyses)
-    profile["enabled"] = previous.get("enabled", True) if previous else True
-    save_learned_profile(profile)
     return {
         "ok": True,
-        "sample_count": len(analyses),
+        "sample_count": profile["learned_metrics"]["sample_count"],
         "sufficient": profile["learned_metrics"]["sufficient"],
         "preset_overrides": profile["preset_overrides"],
     }
 
 
 @router.post("/reset")
-def reset_learned_profile():
-    """Reset to default rafiei_reel.yaml — removes learned profile."""
-    from brain.style_profile import LEARNED_PROFILES_DIR
-    profile_path = LEARNED_PROFILES_DIR / "learned.json"
-    if profile_path.exists():
-        profile_path.unlink()
+def reset_learned_profile(request: Request):
+    """Remove the learned profile (reference analyses are kept for rebuilding)."""
+    style_store.delete_profile(_uid(request))
     return {"ok": True}
 
 
 @router.get("/feedback")
-def get_feedback_summary():
-    """Aggregated feedback summary across all jobs."""
+def get_feedback_summary(request: Request):
+    """Feedback summary across the current user's jobs."""
     from brain.style_feedback import aggregate_all_feedback
-    return aggregate_all_feedback()
+    uid = _uid(request)
+    dirs = [job.dir for job in jobstore.list_jobs() if str(job.user_id) == uid]
+    return aggregate_all_feedback(dirs, persist=False)
 
 
 @router.get("/examples")
-def get_few_shot_examples():
-    """Current few-shot examples from learned profile."""
-    from brain.style_profile import load_learned_profile
-    profile = load_learned_profile()
-    if not profile:
-        return {"examples": []}
-    return {"examples": profile.get("few_shot_examples", [])}
+def get_few_shot_examples(request: Request):
+    """Current few-shot examples from the user's learned profile."""
+    profile = style_store.load_profile(_uid(request))
+    return {"examples": profile.get("few_shot_examples", []) if profile else []}
 
 
 @legacy_router.post("/jobs/{job_id}/feedback")
@@ -253,39 +261,25 @@ def post_plan_feedback(job_id: str, body: dict, request: Request):
 
 
 @router.get("/analyses")
-def list_reference_analyses():
-    """List all individual reference reel analyses."""
-    from brain.style_profile import LEARNED_PROFILES_DIR
-    import json as _json
-
-    refs_dir = LEARNED_PROFILES_DIR / "references"
-    if not refs_dir.exists():
-        return {"analyses": []}
-
-    analyses = []
-    for p in sorted(refs_dir.glob("ref-*.json")):
-        try:
-            data = _json.loads(p.read_text())
-            data["_file"] = p.name
-            analyses.append(data)
-        except Exception:
-            continue
-    return {"analyses": analyses}
+def list_reference_analyses(request: Request):
+    """List the current user's reference reel analyses."""
+    return {"analyses": style_store.list_references(_uid(request))}
 
 
-@router.delete("/analyses/{filename}")
-def delete_reference_analysis(filename: str):
-    """Delete a single reference analysis and its video."""
-    from brain.style_profile import LEARNED_PROFILES_DIR
+@router.get("/analyses/{ref_id}/video")
+def get_reference_video(ref_id: str, request: Request):
+    """Stream a reference video only to the user who uploaded it."""
+    path = style_store.reference_video_path(_uid(request), ref_id)
+    if path is None:
+        raise HTTPException(404, "reference video not found")
+    return FileResponse(path, media_type="video/mp4" if path.suffix.lower() == ".mp4" else None)
 
-    refs_dir = LEARNED_PROFILES_DIR / "references"
-    path = (refs_dir / Path(filename).name).resolve()
-    if path.parent != refs_dir.resolve() or path.suffix != ".json" or not path.name.startswith("ref-") or not path.is_file():
+
+@router.delete("/analyses/{ref_id}")
+def delete_reference_analysis(ref_id: str, request: Request):
+    """Delete one reference analysis and its video, then refresh the learned profile."""
+    uid = _uid(request)
+    if not style_store.delete_reference(uid, ref_id):
         raise HTTPException(404, "analysis not found")
-    path.unlink()
-    # Also remove corresponding video files
-    stem = path.stem
-    for vf in refs_dir.glob(f"{stem}.*"):
-        if vf.suffix in {".mp4", ".mov", ".mkv", ".webm", ".m4v"}:
-            vf.unlink(missing_ok=True)
+    _rebuild(uid)
     return {"ok": True}

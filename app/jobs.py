@@ -686,6 +686,14 @@ def _run_generate(
         _write_status(job)
 
         source_rel = f"raw/{job.raw_name}"
+        learned_profile = None
+        if not style_profile and job.user_id is not None:
+            try:
+                from app import style_store
+                learned_profile = style_store.load_profile(job.user_id)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("learned style profile load failed: %s", exc)
         plan_data, usage = generate_plan(
             job_dir=job.dir,
             transcript=transcript,
@@ -697,6 +705,7 @@ def _run_generate(
             caption_font=caption_font,
             style_profile=style_profile,
             style_ref=style_ref,
+            learned_profile=learned_profile,
             locked_transitions=locked_transitions,
             output_kind=output_kind,
             transition_style=transition_style,

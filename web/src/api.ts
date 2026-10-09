@@ -668,6 +668,9 @@ export const api = {
   async listReferenceAnalyses(): Promise<{ analyses: any[] }> {
     return j(await authFetch(`${BASE}/style/analyses`));
   },
+  styleReferenceVideoUrl(refId: string): string {
+    return `${BASE}/style/analyses/${encodeURIComponent(refId)}/video`;
+  },
   async deleteReferenceAnalysis(filename: string): Promise<{ ok: boolean }> {
     return j(await authFetch(`${BASE}/style/analyses/${encodeURIComponent(filename)}`, { method: "DELETE" }));
   },

@@ -739,6 +739,7 @@ def generate_plan(
     caption_font: Optional[str] = None,
     style_profile: Optional[dict] = None,
     style_ref: Optional[dict] = None,
+    learned_profile: Optional[dict] = None,
     locked_transitions: Optional[list[dict]] = None,
     output_kind: str = "reel",
     transition_request: str = "",
@@ -764,8 +765,8 @@ def generate_plan(
     learned_few_shot = []
     if not style_profile:
         try:
-            from brain.style_profile import load_learned_profile, merge_with_preset
-            learned = load_learned_profile()
+            from brain.style_profile import merge_with_preset
+            learned = learned_profile
             if learned and learned.get("enabled", True) and learned.get("learned_metrics", {}).get("sufficient"):
                 preset = merge_with_preset(preset, learned)
                 learned_few_shot = learned.get("few_shot_examples", [])

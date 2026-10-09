@@ -4,7 +4,7 @@ from typing import Optional
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -90,6 +90,31 @@ class StyleProfileModel(Base):
     name: Mapped[str] = mapped_column(String(255))
     profile_json: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[str] = mapped_column(String(50))
+
+
+class StyleReference(Base):
+    """One analyzed reference reel used to build a user's learned style."""
+
+    __tablename__ = "style_references"
+    __table_args__ = (UniqueConstraint("user_id", "digest", name="uq_style_references_user_digest"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    digest: Mapped[str] = mapped_column(String(32))
+    source_file: Mapped[str] = mapped_column(String(500), default="")
+    analysis: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class LearnedStyleProfile(Base):
+    """A user's merged learned style profile (one row per user)."""
+
+    __tablename__ = "learned_style_profiles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, unique=True)
+    profile: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class ContentRequestModel(Base):

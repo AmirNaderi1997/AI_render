@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.config import settings
 from app.models import (
-    Base, ContentRequestModel, JobModel, StyleProfileModel, UserModel,
+    Base, ContentRequestModel, JobModel, LearnedStyleProfile, StyleProfileModel, StyleReference, UserModel,
 )
 from hermes import models as hermes_models  # Register Hermes tables on shared metadata.
 

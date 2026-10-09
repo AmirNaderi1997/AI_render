@@ -260,12 +260,14 @@ def test_few_shot_examples_valid():
 
 def test_style_enable_setting_survives_rebuild_and_reset(tmp_path, monkeypatch):
     from fastapi import HTTPException
-    from brain import style_profile
+    from types import SimpleNamespace
+    from app import style_store
     from app.routers import style
 
-    monkeypatch.setattr(style_profile, "LEARNED_PROFILES_DIR", tmp_path)
-    refs = tmp_path / "references"
-    refs.mkdir()
+    monkeypatch.setattr(style_store, "LEARNED_PROFILES_DIR", tmp_path)
+    request = SimpleNamespace(state=SimpleNamespace(user=SimpleNamespace(id=101)))
+    refs = tmp_path / "users" / "101" / "references"
+    refs.mkdir(parents=True)
     analysis = {
         "cut_lengths": {"avg": 2.0}, "cut_count": 5,
         "total_duration": 12.0, "pacing": {"trend": "steady"},
@@ -274,20 +276,24 @@ def test_style_enable_setting_survives_rebuild_and_reset(tmp_path, monkeypatch):
     }
     for index in range(3):
         (refs / f"ref-{index}.json").write_text(json.dumps(analysis))
+    preview = refs / "ref-0.mp4"
+    preview.write_bytes(b"video")
+    assert style_store.reference_video_path(101, "0") == preview
+    assert style_store.reference_video_path(102, "0") is None
 
-    assert style.get_learned_style_profile()["sample_count"] == 3
-    assert style.get_learned_style_profile()["active"] is False
-    style.rebuild_learned_profile()
-    assert style.get_learned_style_profile()["enabled"] is True
-    style.update_learned_profile({"enabled": False})
-    assert style.get_learned_style_profile()["enabled"] is False
-    style.rebuild_learned_profile()
-    assert style.get_learned_style_profile()["enabled"] is False
+    assert style.get_learned_style_profile(request)["sample_count"] == 3
+    assert style.get_learned_style_profile(request)["active"] is False
+    style.rebuild_learned_profile(request)
+    assert style.get_learned_style_profile(request)["enabled"] is True
+    style.update_learned_profile({"enabled": False}, request)
+    assert style.get_learned_style_profile(request)["enabled"] is False
+    style.rebuild_learned_profile(request)
+    assert style.get_learned_style_profile(request)["enabled"] is False
 
     with pytest.raises(HTTPException) as error:
-        style.update_learned_profile({"enabled": "yes"})
+        style.update_learned_profile({"enabled": "yes"}, request)
     assert error.value.status_code == 422
 
-    style.reset_learned_profile()
-    assert style.get_learned_style_profile()["sample_count"] == 3
-    assert style.get_learned_style_profile()["active"] is False
+    style.reset_learned_profile(request)
+    assert style.get_learned_style_profile(request)["sample_count"] == 3
+    assert style.get_learned_style_profile(request)["active"] is False

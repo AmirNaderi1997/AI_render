@@ -4,7 +4,36 @@ import { Link } from "react-router-dom";
 import { EmptyState, LoadingState, friendlyError } from "./ui";
 
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "mkv", "webm", "m4v"]);
-const errorText = (error: unknown) => friendlyError(error, "update the learned style");
+const errorText = (error: unknown) => {
+  const message = error instanceof Error ? error.message : "";
+  const detail = message.match(/^(?:400|409|422) (.+)$/s);
+  return detail ? detail[1] : friendlyError(error, "update the learned style");
+};
+
+function ReferenceVideoPreview({ refId, name }: { refId: string; name: string }) {
+  const [src, setSrc] = React.useState("");
+  const [error, setError] = React.useState("");
+  React.useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+    setSrc("");
+    setError("");
+    void api.authenticatedObjectUrl(api.styleReferenceVideoUrl(refId)).then(url => {
+      if (cancelled) URL.revokeObjectURL(url);
+      else { objectUrl = url; setSrc(url); }
+    }).catch(reason => {
+      if (!cancelled) setError(friendlyError(reason, "load the reference preview"));
+    });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [refId]);
+
+  if (error) return <p className="errors" role="alert">Preview unavailable: {error}</p>;
+  if (!src) return <p className="muted" role="status">Loading preview…</p>;
+  return <video controls preload="metadata" src={src} aria-label={`Preview of ${name}`} style={{ display: "block", width: "100%", maxWidth: 480, maxHeight: 270, marginTop: 10, borderRadius: 8, background: "#000" }} />;
+}
 
 export default function StyleLearner() {
   const [profile, setProfile] = React.useState<any>(null);
@@ -17,12 +46,20 @@ export default function StyleLearner() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const fileInput = React.useRef<HTMLInputElement>(null);
+  const reloadSeq = React.useRef(0);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const reload = React.useCallback(async () => {
+    const seq = ++reloadSeq.current;
     setLoading(true);
     const [profileResult, analysesResult, feedbackResult] = await Promise.allSettled([
       api.getLearnedProfile(), api.listReferenceAnalyses(), api.getFeedbackSummary(),
     ]);
+    if (!mounted.current || seq !== reloadSeq.current) return;
     const failures: string[] = [];
     if (profileResult.status === "fulfilled") setProfile(profileResult.value);
     else failures.push(`Profile: ${errorText(profileResult.reason)}`);
@@ -44,13 +81,15 @@ export default function StyleLearner() {
     let count = 0;
     const messages: string[] = [];
     try {
-      for (const file of Array.from(files)) {
+      const list = Array.from(files);
+      for (const [index, file] of list.entries()) {
         const extension = file.name.split(".").pop()?.toLowerCase();
         if (!extension || !VIDEO_EXTENSIONS.has(extension) || file.size === 0 || file.size > 500_000_000) {
           messages.push(`${file.name}: ${!extension || !VIDEO_EXTENSIONS.has(extension) ? "Use MP4, MOV, MKV, WEBM, or M4V" : file.size === 0 ? "File is empty" : "Maximum file size is 500 MB"}`);
           continue;
         }
         setUploadPercent(0);
+        setUploadMsg(`Analyzing ${file.name} (${index + 1} of ${list.length})…`);
         try {
           await api.analyzeReference(file, setUploadPercent);
           count++;
@@ -64,10 +103,12 @@ export default function StyleLearner() {
       }
       messages.unshift(`Analyzed ${count} reel(s).`);
     } finally {
-      setUploadMsg(messages.join("\n"));
-      setUploading(false);
-      if (fileInput.current) fileInput.current.value = "";
-      await reload();
+      if (mounted.current) {
+        setUploadMsg(messages.join("\n"));
+        setUploading(false);
+        if (fileInput.current) fileInput.current.value = "";
+        await reload();
+      }
     }
   }
 
@@ -86,14 +127,11 @@ export default function StyleLearner() {
     setBusy(true); setError("");
     try {
       await api.deleteReferenceAnalysis(filename);
-      const remaining = analyses.filter(a => a._file !== filename);
-      if (remaining.length) await api.rebuildLearnedProfile();
-      else await api.resetLearnedProfile();
       await reload();
       setUploadMsg("Reference removed and profile updated.");
     } catch (e) {
       await reload();
-      setError(`Reference update failed: ${errorText(e)}. Reload the page before retrying.`);
+      setError(`Reference update failed: ${errorText(e)}`);
     } finally { setBusy(false); }
   }
 
@@ -124,7 +162,7 @@ export default function StyleLearner() {
         Upload your own edited reels to teach the AI your editing style.
         The system learns your cut rhythm, pacing, caption density, and more.
       </p>
-      <p className="muted">For reusable visual styles and fonts, visit <Link to="/style-library">Styles &amp; Fonts Library</Link>.</p>
+      <p className="muted">Style Learner analyzes video references. To build a reusable look from still images, use the <Link to="/style-library">Styles &amp; Fonts Library</Link>.</p>
       {loading && <LoadingState label="Loading style learner…" />}
       {error && <div className="errors" role="alert" style={{ whiteSpace: "pre-wrap" }}>{error} <button type="button" className="secondary" onClick={() => void reload()}>Retry</button></div>}
 
@@ -170,6 +208,7 @@ export default function StyleLearner() {
                   <span>Pacing: {a.pacing?.trend}</span>
                   {a.audio?.mean_volume_db != null && <span>Avg volume: {a.audio.mean_volume_db?.toFixed(1)} dB</span>}
                 </div>
+                <ReferenceVideoPreview refId={a._file} name={a.source_file || a._file} />
               </div>
             ))}
           </div>
@@ -177,7 +216,7 @@ export default function StyleLearner() {
       </div>
 
       {/* Profile view */}
-      {!loading && profile && (
+      {profile && (
         <div className="card">
           <div className="section-header">
             <h2>Learned Profile</h2>
