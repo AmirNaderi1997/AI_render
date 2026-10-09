@@ -16,6 +16,9 @@ from app.celery_app import CELERY_AVAILABLE
 class DenoiseState:
     status: str = "idle"  # idle | processing | ready | error | skipped
     strength: float = 0.5
+    level: Optional[str] = None
+    preserve_voice: bool = True
+    denoised_video: Optional[str] = None
     original_audio: Optional[str] = None
     cleaned_audio: Optional[str] = None
     approved: bool = False
@@ -72,9 +75,13 @@ def get_state(job_id: str, job_dir: Path) -> DenoiseState:
         return _states[job_id]
 
 
-def start_denoise(job_id: str, job_dir: Path, strength: float = 0.5) -> DenoiseState:
+def start_denoise(job_id: str, job_dir: Path, strength: float = 0.5,
+                  level: Optional[str] = None, preserve_voice: bool = True) -> DenoiseState:
     """Start background denoise. Returns current state."""
     job_dir = Path(job_dir)
+    if level is not None:
+        from engine.denoise import preset_strength
+        strength = preset_strength(level)
     strength = float(strength)
     if not math.isfinite(strength) or not 0.0 <= strength <= 1.0:
         raise ValueError("denoise strength must be between 0 and 1")
@@ -85,6 +92,8 @@ def start_denoise(job_id: str, job_dir: Path, strength: float = 0.5) -> DenoiseS
         state = DenoiseState(
             status="processing",
             strength=strength,
+            level=level,
+            preserve_voice=preserve_voice,
             started_at=time.time(),
         )
         _states[job_id] = state
@@ -92,20 +101,25 @@ def start_denoise(job_id: str, job_dir: Path, strength: float = 0.5) -> DenoiseS
 
     if CELERY_AVAILABLE:
         from app.tasks import task_denoise_audio
-        task_denoise_audio.delay(job_id, {"job_dir": str(job_dir), "strength": strength})
+        task_denoise_audio.delay(job_id, {
+            "job_dir": str(job_dir), "strength": strength,
+            "level": level, "preserve_voice": preserve_voice,
+        })
     else:
         threading.Thread(
             target=_run_denoise,
             args=(job_id, job_dir, strength),
+            kwargs={"level": level, "preserve_voice": preserve_voice},
             daemon=True,
         ).start()
     return state
 
 
-def _run_denoise(job_id: str, job_dir: Path, strength: float, *, raise_errors: bool = False) -> None:
+def _run_denoise(job_id: str, job_dir: Path, strength: float, *, raise_errors: bool = False,
+                 level: Optional[str] = None, preserve_voice: bool = True) -> None:
     from engine.denoise import (
         extract_speech_audio, denoise_speech, generate_ab_samples,
-        measure_quality, detect_silence,
+        measure_quality, detect_silence, remux_with_video,
     )
 
     try:
@@ -151,7 +165,16 @@ def _run_denoise(job_id: str, job_dir: Path, strength: float, *, raise_errors: b
             return
 
         # Denoise
-        cleaned = denoise_speech(original, strength=strength, out_dir=audio_dir)
+        cleaned = denoise_speech(original, strength=strength, out_dir=audio_dir,
+                                 level=level, preserve_voice=preserve_voice)
+
+        # Denoised video saved alongside the original; failure is non-fatal
+        denoised_video = None
+        try:
+            denoised_video = str(remux_with_video(
+                raw_path, cleaned, audio_dir / f"{raw_path.stem}_denoised.mp4"))
+        except Exception:
+            pass
 
         # Generate A/B samples
         samples = generate_ab_samples(original, cleaned)
@@ -174,6 +197,7 @@ def _run_denoise(job_id: str, job_dir: Path, strength: float, *, raise_errors: b
             state.strength = strength
             state.original_audio = str(original)
             state.cleaned_audio = str(cleaned)
+            state.denoised_video = denoised_video
             state.message = "Ready for review"
             state.samples = samples_dict
             state.quality = quality
@@ -215,14 +239,15 @@ def set_bypass(job_id: str, job_dir: Path, bypass: bool) -> DenoiseState:
         return state
 
 
-def adjust_strength(job_id: str, job_dir: Path, strength: float) -> DenoiseState:
+def adjust_strength(job_id: str, job_dir: Path, strength: float,
+                    level: Optional[str] = None, preserve_voice: bool = True) -> DenoiseState:
     """Re-run denoise with a new strength. Invalidates approval."""
     with _lock:
         state = _load_state(job_dir) if CELERY_AVAILABLE else _states.get(job_id) or _load_state(job_dir)
         if state.status == "processing":
             raise ValueError("denoise is already processing")
         state.approved = False
-    return start_denoise(job_id, job_dir, strength)
+    return start_denoise(job_id, job_dir, strength, level=level, preserve_voice=preserve_voice)
 
 
 def invalidate(job_id: str, job_dir: Path) -> None:

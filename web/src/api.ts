@@ -561,6 +561,18 @@ export const api = {
       body: JSON.stringify({ strength }),
     }));
   },
+  async triggerDenoise(id: string, strength: "light" | "medium" | "heavy", preserveVoice: boolean): Promise<{ status: string }> {
+    return j(await authFetch(`${BASE}/jobs/${id}/denoise`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ strength, preserve_voice: preserveVoice }),
+    }));
+  },
+  async getDenoiseCompare(id: string): Promise<{ original_url: string; denoised_url: string }> {
+    return j(await authFetch(`${BASE}/jobs/${id}/denoise/compare`));
+  },
+  async applyDenoise(id: string): Promise<any> {
+    return j(await authFetch(`${BASE}/jobs/${id}/denoise/apply`, { method: "POST" }));
+  },
   async getDenoiseStatus(id: string): Promise<any> {
     return j(await authFetch(`${BASE}/jobs/${id}/denoise/status`));
   },

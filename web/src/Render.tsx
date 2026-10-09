@@ -10,7 +10,8 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "error", "cancelled", 
 
 function DenoiseCard({ id }: { id: string }) {
   const [state, setState] = React.useState<any>(null);
-  const [strength, setStrength] = React.useState(0.5);
+  const [level, setLevel] = React.useState<"light" | "medium" | "heavy">("medium");
+  const [preserveVoice, setPreserveVoice] = React.useState(true);
   const [samples, setSamples] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -29,7 +30,7 @@ function DenoiseCard({ id }: { id: string }) {
       if (s.status === "ready" && !samplesRequested.current) {
         samplesRequested.current = true;
         setSamplesLoading(true);
-        api.getDenoiseSamples(id).then(result => { setSamples(result); setSamplesError(""); })
+        api.getDenoiseCompare(id).then(result => { setSamples(result); setSamplesError(""); })
           .catch(e => { samplesRequested.current = false; setSamplesError(friendlyError(e, "load the audio comparison")); })
           .finally(() => setSamplesLoading(false));
       }
@@ -63,7 +64,7 @@ function DenoiseCard({ id }: { id: string }) {
   async function handleStart() {
     setLoading(true);
     try {
-      await api.startDenoise(id, strength);
+      await api.triggerDenoise(id, level, preserveVoice);
       poll();
     } catch (e) { setError(friendlyError(e, "start audio cleanup")); }
     finally { setLoading(false); }
@@ -71,7 +72,7 @@ function DenoiseCard({ id }: { id: string }) {
 
   async function handleApprove() {
     setLoading(true); setError("");
-    try { await api.approveDenoise(id); poll(); }
+    try { await api.applyDenoise(id); poll(); }
     catch (e) { setError(friendlyError(e, "approve cleaned audio")); }
     finally { setLoading(false); }
   }
@@ -86,21 +87,36 @@ function DenoiseCard({ id }: { id: string }) {
   async function handleAdjust() {
     setLoading(true);
     try {
-      await api.adjustDenoise(id, strength);
+      await api.triggerDenoise(id, level, preserveVoice);
       poll();
     } catch (e) { setError(friendlyError(e, "reprocess the audio")); }
     finally { setLoading(false); }
   }
 
-  const strengthLabel = strength <= 0.3 ? "Light" : strength <= 0.6 ? "Medium" : "Strong";
+  const controls = (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16, marginBottom: 12 }}>
+      <label>
+        Strength{" "}
+        <select value={level} onChange={e => setLevel(e.target.value as "light" | "medium" | "heavy")}>
+          <option value="light">Light</option>
+          <option value="medium">Medium</option>
+          <option value="heavy">Heavy</option>
+        </select>
+      </label>
+      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input type="checkbox" checked={preserveVoice} onChange={e => setPreserveVoice(e.target.checked)} />
+        Preserve Voice
+      </label>
+    </div>
+  );
 
   return (
     <div className="card">
       <div className="section-header">
-        <h2>Audio Cleanup</h2>
+        <h2>Reduce Noise</h2>
         {approved && (
           <span className="status-badge done" style={{ fontSize: 11 }}>
-            Denoised at {(state.strength * 100).toFixed(0)}%
+            Denoised ({state.level ?? "custom"})
           </span>
         )}
         {bypassed && <span className="status-badge" style={{ fontSize: 11 }}>Using original</span>}
@@ -115,16 +131,9 @@ function DenoiseCard({ id }: { id: string }) {
           <p className="muted" style={{ marginBottom: 12 }}>
             Clean background noise from speech audio before mixing with music and SFX.
           </p>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
-            <label style={{ flex: 1 }}>
-              Strength: {strengthLabel} ({(strength * 100).toFixed(0)}%)
-              <input type="range" min="0" max="1" step="0.05"
-                value={strength} onChange={e => setStrength(parseFloat(e.target.value))}
-                style={{ width: "100%", marginTop: 4 }} />
-            </label>
-          </div>
+          {controls}
           <button onClick={handleStart} disabled={loading}>
-            {loading ? "Starting..." : "Clean Speech Audio"}
+            {loading ? "Starting..." : "Reduce Noise"}
           </button>
         </div>
       )}
@@ -134,7 +143,7 @@ function DenoiseCard({ id }: { id: string }) {
           <span className="generating-pulse" style={{
             width: 8, height: 8, borderRadius: "50%", background: "var(--accent)"
           }} />
-          <span>Processing noise removal...</span>
+          <span>Reducing noise… this can take a minute</span>
         </div>
       )}
 
@@ -148,21 +157,14 @@ function DenoiseCard({ id }: { id: string }) {
 
       {ready && (
         <div>
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
-              <label style={{ flex: 1 }}>
-                Strength: {strengthLabel} ({(strength * 100).toFixed(0)}%)
-                <input type="range" min="0" max="1" step="0.05"
-                  value={strength} onChange={e => setStrength(parseFloat(e.target.value))}
-                  style={{ width: "100%", marginTop: 4 }} />
-              </label>
-              {Math.abs(strength - state.strength) > 0.01 && (
-                <button className="secondary" onClick={handleAdjust} disabled={loading}
-                  style={{ fontSize: 12, padding: "6px 12px" }}>
-                  {loading ? "..." : "Re-process"}
-                </button>
-              )}
-            </div>
+          <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+            {controls}
+            {(level !== state.level || preserveVoice !== state.preserve_voice) && (
+              <button className="secondary" onClick={handleAdjust} disabled={loading}
+                style={{ fontSize: 12, padding: "6px 12px" }}>
+                {loading ? "..." : "Re-process"}
+              </button>
+            )}
           </div>
 
           {samplesLoading && !samples && <LoadingState label="Loading audio comparison…" rows={2} />}
@@ -177,7 +179,7 @@ function DenoiseCard({ id }: { id: string }) {
                     style={{ width: "100%" }} />
                 </div>
                 <div>
-                  <p className="muted" style={{ marginBottom: 4 }}>Cleaned</p>
+                  <p className="muted" style={{ marginBottom: 4 }}>Denoised</p>
                   <AuthenticatedMedia as="audio" controls src={api.denoiseAudioUrl(id, "cleaned")}
                     style={{ width: "100%" }} />
                 </div>
@@ -187,7 +189,7 @@ function DenoiseCard({ id }: { id: string }) {
 
           <div style={{ display: "flex", gap: 10 }}>
             {!approved && (
-              <button onClick={handleApprove} disabled={loading}>Approve &amp; Use</button>
+              <button onClick={handleApprove} disabled={loading}>Apply Denoised Audio</button>
             )}
             {!bypassed && (
               <button className="secondary" onClick={() => handleBypass(true)} disabled={loading}>Use Original</button>

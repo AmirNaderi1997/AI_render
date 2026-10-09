@@ -124,7 +124,9 @@ if CELERY_AVAILABLE:
             job_dir = Path(settings_dict["job_dir"])
             get_state(job_id, job_dir)
             _run_denoise(
-                job_id, job_dir, float(settings_dict["strength"]), raise_errors=True
+                job_id, job_dir, float(settings_dict["strength"]), raise_errors=True,
+                level=settings_dict.get("level"),
+                preserve_voice=settings_dict.get("preserve_voice", True),
             )
 
         _execute(self, "denoise", job_id, run)

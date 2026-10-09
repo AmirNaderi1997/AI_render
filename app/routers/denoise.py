@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 from app import jobs as jobstore
 from app.job_access import require_job_access
@@ -13,6 +14,11 @@ router = APIRouter(prefix="/jobs", tags=["denoise"], dependencies=[Depends(requi
 
 class DenoiseStartBody(BaseModel):
     strength: float = Field(default=0.5, ge=0.0, le=1.0, allow_inf_nan=False)
+
+
+class DenoiseTriggerBody(BaseModel):
+    strength: Literal["light", "medium", "heavy"] = "medium"
+    preserve_voice: bool = True
 
 
 class DenoiseBypassBody(BaseModel):
@@ -52,6 +58,43 @@ def _sync_denoise_plan(job, state) -> None:
 def _require_render_idle(job) -> None:
     if getattr(getattr(job, "render", None), "status", None) in {"queued", "running"}:
         raise HTTPException(409, "wait for the current render before reprocessing audio")
+
+
+@router.post("/{job_id}/denoise", status_code=202)
+def denoise_trigger(job_id: str, body: DenoiseTriggerBody = DenoiseTriggerBody()):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    _require_render_idle(job)
+    from brain.denoise_manager import DenoiseState, get_state, start_denoise
+    try:
+        if get_state(job_id, job.dir).status != "processing":
+            _sync_denoise_plan(job, DenoiseState())
+        state = start_denoise(job_id, job.dir, level=body.strength,
+                              preserve_voice=body.preserve_voice)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"status": state.status}
+
+
+@router.get("/{job_id}/denoise/compare")
+def denoise_compare(job_id: str):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    from brain.denoise_manager import get_state
+    state = get_state(job_id, job.dir)
+    if state.status != "ready" or not state.samples:
+        raise HTTPException(404, "no denoised audio available yet")
+    return {
+        "original_url": f"/api/jobs/{job_id}/denoise/sample/original",
+        "denoised_url": f"/api/jobs/{job_id}/denoise/sample/cleaned",
+    }
+
+
+@router.post("/{job_id}/denoise/apply")
+def denoise_apply(job_id: str):
+    return denoise_approve(job_id)
 
 
 @router.post("/{job_id}/denoise/start")

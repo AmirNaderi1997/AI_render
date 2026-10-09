@@ -13,6 +13,23 @@ from pathlib import Path
 from typing import Optional
 
 
+# Preset name -> (afftdn noise floor dB, representative 0..1 strength)
+STRENGTH_PRESETS: dict[str, tuple[int, float]] = {
+    "light": (-20, 0.25),
+    "medium": (-30, 0.5),
+    "heavy": (-40, 0.9),
+}
+VOICE_FILTER = "highpass=f=80,lowpass=f=8000"
+
+
+def preset_strength(level: str) -> float:
+    """Return the 0..1 strength that represents a light/medium/heavy preset."""
+    try:
+        return STRENGTH_PRESETS[level][1]
+    except KeyError:
+        raise ValueError(f"strength must be one of {sorted(STRENGTH_PRESETS)}") from None
+
+
 def _ffmpeg() -> str:
     p = shutil.which("ffmpeg")
     if not p:
@@ -75,16 +92,23 @@ def extract_speech_audio(video_path: Path, out_dir: Optional[Path] = None) -> Pa
 
 
 def denoise_speech(audio_path: Path, strength: float = 0.5,
-                   out_dir: Optional[Path] = None) -> Path:
+                   out_dir: Optional[Path] = None,
+                   level: Optional[str] = None,
+                   preserve_voice: bool = True) -> Path:
     """Apply noise reduction to speech audio. Returns path to cleaned file.
 
-    strength: 0.0 (bypass) to 1.0 (maximum cleaning).
-    Uses ffmpeg's afftdn filter with noise reduction mapped from strength.
+    level: "light" | "medium" | "heavy" -> afftdn=nf=-20/-30/-40 (takes precedence).
+    strength: 0.0 (bypass) to 1.0 (maximum cleaning), used when level is None.
+    preserve_voice: band-limit to 80-8000 Hz before denoising to protect speech.
     """
     audio_path = Path(audio_path)
     if not audio_path.is_file():
         raise FileNotFoundError(f"audio not found: {audio_path}")
 
+    if level is not None:
+        if level not in STRENGTH_PRESETS:
+            raise ValueError(f"strength must be one of {sorted(STRENGTH_PRESETS)}")
+        strength = STRENGTH_PRESETS[level][1]
     strength = max(0.0, min(1.0, strength))
 
     if out_dir is None:
@@ -92,22 +116,32 @@ def denoise_speech(audio_path: Path, strength: float = 0.5,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_path = out_dir / f"speech_cleaned_{strength:.2f}.wav"
+    out_path = out_dir / f"speech_cleaned_{level or format(strength, '.2f')}.wav"
 
-    if strength < 0.01:
-        # Bypass: copy original
+    if level is None and strength < 0.01:
         shutil.copy2(audio_path, out_path)
         return out_path
 
-    # Map strength 0..1 to noise reduction 6..40 dB
-    nr_db = 6 + strength * 34
-    # Map strength to noise floor -40..-80
-    nf_db = -40 - strength * 40
+    if level is not None:
+        afftdn = f"afftdn=nf={STRENGTH_PRESETS[level][0]}"
+    else:
+        # Map strength 0..1 to noise reduction 6..40 dB, noise floor -40..-80
+        afftdn = f"afftdn=nr={6 + strength * 34:.0f}:nf={-40 - strength * 40:.0f}"
+    chain = f"{VOICE_FILTER},{afftdn}" if preserve_voice else afftdn
 
+    cmd = [_ffmpeg(), "-y", "-i", str(audio_path), "-af", chain, str(out_path)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out_path
+
+
+def remux_with_video(video_path: Path, audio_path: Path, out_path: Path) -> Path:
+    """Write a copy of the video with its audio replaced; the original is untouched."""
+    video_path, audio_path, out_path = Path(video_path), Path(audio_path), Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        _ffmpeg(), "-y", "-i", str(audio_path),
-        "-af", f"afftdn=nr={nr_db:.0f}:nf={nf_db:.0f}",
-        str(out_path),
+        _ffmpeg(), "-y", "-i", str(video_path), "-i", str(audio_path),
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac",
+        "-shortest", str(out_path),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return out_path
