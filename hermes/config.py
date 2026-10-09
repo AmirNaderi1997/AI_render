@@ -1,4 +1,9 @@
+import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+log = logging.getLogger("uvicorn.error")
 
 
 class Settings(BaseSettings):
@@ -12,6 +17,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str = ""
     ALLOWED_HOSTS: str = ""
     HERMES_TOKEN_KEY: str = ""
+    HERMES_ENCRYPTION_KEY: str = ""
     HERMES_DATA_DIR: str = "jobs/hermes"
     HERMES_PUBLIC_MEDIA_BASE_URL: str = ""
     APP_ENV: str = "development"
@@ -23,19 +29,32 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-async def instagram_credentials(user_id):
-    """Resolve each Instagram value from env, then this user's encrypted settings."""
-    from hermes.database import get_row
-    from hermes.security import decrypt_token
+def settings_row_id(user_id, provider="instagram"):
+    return f"{provider}:{user_id}"
 
-    row = await get_row("settings", str(user_id))
-    values = {}
-    for field, env_name in (
-        ("access_token", "INSTAGRAM_ACCESS_TOKEN"),
-        ("app_id", "INSTAGRAM_APP_ID"),
-        ("app_secret", "INSTAGRAM_APP_SECRET"),
-        ("business_account_id", "INSTAGRAM_BUSINESS_ACCOUNT_ID"),
-    ):
-        env_value = getattr(settings, env_name).strip()
-        values[field] = env_value or (decrypt_token(row[field]) if row and row.get(field) else "")
-    return values
+
+async def stored_instagram_credentials(user_id):
+    """Decrypted credentials saved through the Hermes settings UI, or {} when none or unreadable."""
+    from fastapi import HTTPException
+
+    from hermes.database import get_row
+    from hermes.security import decrypt_setting
+
+    row = await get_row("settings", settings_row_id(user_id))
+    stored = (row or {}).get("encrypted_credentials") or {}
+    try:
+        return {field: decrypt_setting(value) for field, value in stored.items() if value}
+    except HTTPException:
+        log.warning("hermes_settings credentials for user %s cannot be decrypted; falling back to environment", user_id)
+        return {}
+
+
+async def instagram_credentials(user_id):
+    """Resolve Instagram credentials: this user's stored settings first, then .env values."""
+    stored = await stored_instagram_credentials(user_id)
+    return {
+        "access_token": stored.get("access_token") or settings.INSTAGRAM_ACCESS_TOKEN.strip(),
+        "app_id": settings.INSTAGRAM_APP_ID.strip(),
+        "app_secret": stored.get("app_secret") or settings.INSTAGRAM_APP_SECRET.strip(),
+        "business_account_id": stored.get("instagram_user_id") or settings.INSTAGRAM_BUSINESS_ACCOUNT_ID.strip(),
+    }

@@ -31,9 +31,10 @@ const query = (values = {}) => {
 };
 
 export const hermesApi = {
-  getSettings: () => request('/settings'),
-  saveSettings: (credentials) => request('/settings', { method: 'POST', body: credentials }),
-  testConnection: () => request('/settings/test', { method: 'POST' }),
+  getInstagramSettings: () => request('/settings/instagram'),
+  saveInstagramSettings: (credentials) => request('/settings/instagram', { method: 'POST', body: credentials }),
+  deleteInstagramSettings: () => request('/settings/instagram', { method: 'DELETE' }),
+  testInstagramConnection: () => request('/settings/instagram/test', { method: 'POST' }),
   connectInstagram: () => request('/auth/connect', { method: 'POST' }),
   authCallback: (code, state) => request(`/auth/callback${query({ code, state })}`),
   refreshToken: (accountId) => request('/auth/refresh', { method: 'POST', body: { account_id: accountId } }),

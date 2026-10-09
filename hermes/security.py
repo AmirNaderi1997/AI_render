@@ -22,6 +22,26 @@ def cipher():
     return Fernet(key)
 
 
+def settings_cipher():
+    """Cipher for UI-saved credentials; HERMES_ENCRYPTION_KEY, else the stable token key."""
+    secret = settings.HERMES_ENCRYPTION_KEY or settings.HERMES_TOKEN_KEY
+    if not secret:
+        raise HTTPException(503, detail={"code": "ENCRYPTION_KEY_NOT_CONFIGURED"})
+    key = base64.urlsafe_b64encode(hashlib.sha256(("hermes-settings-fernet-v1:" + secret).encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_setting(value):
+    return settings_cipher().encrypt(value.encode()).decode()
+
+
+def decrypt_setting(value):
+    try:
+        return settings_cipher().decrypt(value.encode()).decode()
+    except InvalidToken as exc:
+        raise HTTPException(503, detail={"code": "SETTINGS_DECRYPT_FAILED"}) from exc
+
+
 def encrypt_token(token):
     return cipher().encrypt(token.encode()).decode()
 

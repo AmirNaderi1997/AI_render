@@ -25,16 +25,16 @@ class InstagramAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class InstagramSettings(Base):
-    __tablename__ = "hermes_instagram_settings"
+class HermesSetting(Base):
+    """Per-user provider credentials; every value inside encrypted_credentials is Fernet ciphertext."""
+    __tablename__ = "hermes_settings"
+    __table_args__ = (UniqueConstraint("user_id", "provider"),)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
-    access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
-    app_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    app_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
-    business_account_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    connection_status: Mapped[str] = mapped_column(String(20), default="disconnected")
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(30))
+    encrypted_credentials: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -98,7 +98,7 @@ class AdvisorLog(Base):
 
 TABLES = {
     "accounts": InstagramAccount,
-    "settings": InstagramSettings,
+    "settings": HermesSetting,
     "posts": ScheduledPost,
     "post_analytics": PostAnalytics,
     "account_insights": AccountInsight,

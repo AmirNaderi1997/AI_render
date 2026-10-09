@@ -8,6 +8,7 @@ import string
 import time
 from contextlib import asynccontextmanager
 
+from cryptography.fernet import Fernet
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -55,8 +56,22 @@ def _ensure_token_key():
     settings.HERMES_TOKEN_KEY = "".join(secrets.choice(alphabet) for _ in range(32))
 
 
+def _ensure_encryption_key():
+    """Credentials saved in the UI use HERMES_ENCRYPTION_KEY, then HERMES_TOKEN_KEY, then a dev-only random key."""
+    if settings.HERMES_ENCRYPTION_KEY or len(settings.HERMES_TOKEN_KEY) >= 32:
+        return
+    if enforce_production_config:
+        raise RuntimeError("HERMES_ENCRYPTION_KEY (or HERMES_TOKEN_KEY) must be set in production")
+    log.warning(
+        "HERMES_ENCRYPTION_KEY is unset; using a random session-only development key, "
+        "so credentials saved in Hermes settings cannot be read after a restart"
+    )
+    settings.HERMES_ENCRYPTION_KEY = Fernet.generate_key().decode()
+
+
 @asynccontextmanager
 async def lifespan(app):
+    _ensure_encryption_key()
     _ensure_token_key()
     await init_db(create_schema=not production)
     task = asyncio.create_task(local_schedule_loop()) if not settings.REDIS_URL else None

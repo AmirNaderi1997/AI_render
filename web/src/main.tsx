@@ -28,7 +28,7 @@ const HermesPostEditor = React.lazy(() => import("./pages/hermes/HermesPostEdito
 const HermesAnalytics = React.lazy(() => import("./pages/hermes/HermesAnalytics.jsx"));
 const HermesAdvisor = React.lazy(() => import("./pages/hermes/HermesAdvisor.jsx"));
 const HermesContentPlan = React.lazy(() => import("./pages/hermes/HermesContentPlan.jsx"));
-const HermesSettings = React.lazy(() => import("./pages/hermes/HermesSettings.jsx"));
+const HermesSettings = React.lazy(() => import("./pages/hermes/HermesSettings"));
 
 function LoadingSpinner() {
   return <LoadingState label="Loading page…" rows={2} />;

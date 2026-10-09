@@ -1,87 +1,89 @@
-"""Per-user Instagram credentials; API responses never contain secret values."""
+"""Per-user Instagram credentials saved from the browser; responses never contain secret values."""
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from hermes.config import instagram_credentials
-from hermes.database import get_row, save_row
-from hermes.security import current_user, encrypt_token, utcnow
+from hermes.config import instagram_credentials, settings_row_id, stored_instagram_credentials
+from hermes.database import delete_row, get_row, save_row
+from hermes.security import current_user, encrypt_setting, utcnow
 from hermes.services.instagram_api import InstagramAPI, InstagramError
 
-router = APIRouter(prefix="/api/hermes/settings", tags=["hermes-settings"])
+router = APIRouter(prefix="/api/hermes/settings/instagram", tags=["hermes-settings"])
 
 
-class SettingsInput(BaseModel):
+class InstagramCredentialsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    access_token: str = Field(default="", max_length=4096)
-    app_id: str = Field(default="", max_length=512)
-    app_secret: str = Field(default="", max_length=4096)
-    business_account_id: str = Field(default="", max_length=512)
+    access_token: str = Field(max_length=4096)
+    instagram_user_id: str = Field(max_length=512)
+    app_secret: str = Field(max_length=4096)
+
+    @field_validator("*")
+    @classmethod
+    def not_blank(cls, value: str):
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be empty")
+        return value
 
 
-class SettingsOutput(BaseModel):
-    access_token: str
-    app_id: str
-    app_secret: str
-    business_account_id: str
+class InstagramStatus(BaseModel):
+    configured: bool
+    instagram_user_id: str | None = None
+
+
+class InstagramConnection(InstagramStatus):
     connection_status: Literal["connected", "disconnected", "expired"]
 
 
-def _mask(value: str) -> str:
-    return f"{value[:3]}...***{value[-3:]}" if len(value) >= 8 else "***" if value else ""
+async def _status(user_id) -> InstagramStatus:
+    stored = await stored_instagram_credentials(user_id)
+    configured = bool(stored.get("access_token"))
+    return InstagramStatus(configured=configured, instagram_user_id=stored.get("instagram_user_id") if configured else None)
 
 
-async def _output(user_id: str) -> SettingsOutput:
-    values = await instagram_credentials(user_id)
-    row = await get_row("settings", user_id)
-    return SettingsOutput(**{field: _mask(value) for field, value in values.items()},
-                          connection_status=row.get("connection_status", "disconnected") if row else "disconnected")
+@router.get("", response_model=InstagramStatus)
+async def get_instagram_settings(user=Depends(current_user)):
+    return await _status(str(user.id))
 
 
-@router.get("", response_model=SettingsOutput)
-async def get_settings(user=Depends(current_user)):
-    return await _output(str(user.id))
-
-
-@router.post("", response_model=SettingsOutput)
-async def save_settings(body: SettingsInput, user=Depends(current_user)):
+@router.post("", response_model=InstagramStatus)
+async def save_instagram_settings(body: InstagramCredentialsInput, user=Depends(current_user)):
     user_id = str(user.id)
-    existing = await get_row("settings", user_id)
-    row = dict(existing) if existing else {"id": user_id, "user_id": int(user_id) if str(user_id).isdigit() else user_id}
-    changed = False
-    for field, value in body.model_dump().items():
-        value = value.strip()
-        if value:
-            row[field] = encrypt_token(value)
-            changed = True
-    if not changed:
-        raise HTTPException(422, detail={"code": "CREDENTIALS_REQUIRED"})
-    row["connection_status"] = "disconnected"
-    row["updated_at"] = utcnow()
-    await save_row("settings", row)
-    return await _output(user_id)
+    row_id = settings_row_id(user_id)
+    existing = await get_row("settings", row_id)
+    now = utcnow()
+    await save_row("settings", {
+        "id": row_id,
+        "user_id": int(user_id) if user_id.isdigit() else user_id,
+        "provider": "instagram",
+        "encrypted_credentials": {field: encrypt_setting(value) for field, value in body.model_dump().items()},
+        "created_at": existing["created_at"] if existing else now,
+        "updated_at": now,
+    })
+    return await _status(user_id)
 
 
-@router.post("/test", response_model=SettingsOutput)
-async def test_connection(user=Depends(current_user)):
+@router.delete("", response_model=InstagramStatus)
+async def delete_instagram_settings(user=Depends(current_user)):
+    await delete_row("settings", settings_row_id(str(user.id)))
+    return await _status(str(user.id))
+
+
+@router.post("/test", response_model=InstagramConnection)
+async def test_instagram_connection(user=Depends(current_user)):
+    """Checks the effective credentials (saved settings, then .env) against the Graph API."""
     user_id = str(user.id)
     values = await instagram_credentials(user_id)
     if not values["access_token"] or not values["business_account_id"]:
         raise HTTPException(422, detail={"code": "TOKEN_AND_BUSINESS_ACCOUNT_REQUIRED"})
-    row = await get_row("settings", user_id)
-    if not row:
-        row = {"id": user_id, "user_id": int(user_id) if user_id.isdigit() else user_id}
     try:
         profile = await InstagramAPI(user_id, values["access_token"]).profile()
-        status = "connected" if str(profile.get("id", "")) == values["business_account_id"] else "disconnected"
+        connection = "connected" if str(profile.get("id", "")) == values["business_account_id"] else "disconnected"
     except InstagramError as exc:
-        if exc.code == "INSTAGRAM_AUTH_ERROR":
-            status = "expired"
-        else:
+        if exc.code != "INSTAGRAM_AUTH_ERROR":
             raise HTTPException(exc.status, detail={"code": exc.code}) from exc
-    row["connection_status"] = status
-    row["updated_at"] = utcnow()
-    await save_row("settings", row)
-    return await _output(user_id)
+        connection = "expired"
+    status = await _status(user_id)
+    return InstagramConnection(**status.model_dump(), connection_status=connection)
