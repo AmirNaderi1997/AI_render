@@ -652,8 +652,8 @@ export const api = {
   async getStoryboardStatus(id: string): Promise<{ state: string; scenes_done: number; scenes_total: number; cost_so_far: number | null; error?: string; warnings?: string[] } | null> {
     return j(await authFetch(`${BASE}/jobs/${id}/storyboard/status`));
   },
-  async getProviders(): Promise<any[]> {
-    return j(await authFetch(`${BASE}/content/providers`));
+  async getProviders(signal?: AbortSignal): Promise<any[]> {
+    return j(await authFetch(`${BASE}/content/providers`, { signal }));
   },
   async exportImage(id: string): Promise<Blob> {
     const r = await authFetch(`${BASE}/content/export-image/${id}`, { method: "POST" });

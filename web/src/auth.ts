@@ -64,6 +64,7 @@ export async function ensureFreshToken(): Promise<string | null> {
         credentials: "include",
         headers: { "content-type": "application/json" },
         body: "{}",
+        signal: AbortSignal.timeout(5000),
       });
       if (!r.ok) {
         clearToken();

@@ -42,18 +42,18 @@ export default function ContentCreator() {
     cost_status?: string;
   } | null>(null);
 
+  const [providerError, setProviderError] = React.useState(false);
+  const [providerReload, setProviderReload] = React.useState(0);
+
   React.useEffect(() => {
+    const ctrl = new AbortController();
     let cancelled = false;
-    const timeout = setTimeout(() => {
-      if (cancelled) return;
-      setProvider(current => current || "local_fixture");
-      setProvidersLoading(false);
-      setErr("Media providers are unavailable right now. The local demo provider is selected; check your connection before creating customer content.");
-    }, 10000);
-    api.getProviders().then(items => {
-      if (cancelled) return;
-      clearTimeout(timeout);
-      setProvidersLoading(false);
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; ctrl.abort(); }, 10000);
+    setProvidersLoading(true);
+    setProviderError(false);
+    setErr(null);
+    api.getProviders(ctrl.signal).then(items => {
       const list = Array.isArray(items) ? items : [];
       setProviders(list);
       setProvider(current => current || (
@@ -64,13 +64,18 @@ export default function ContentCreator() {
       ));
     }).catch((e: Error) => {
       if (cancelled) return;
-      clearTimeout(timeout);
       setProvider(current => current || "local_fixture");
-      setProvidersLoading(false);
-      setErr(friendlyError(e, "load media providers") + " The local demo provider is selected.");
+      const missing = /^404\b/.test(e.message);
+      setErr(missing
+        ? "Provider list endpoint not found. The local demo provider is selected."
+        : (timedOut ? "Loading media providers timed out." : friendlyError(e, "load media providers")) + " The local demo provider is selected.");
+      setProviderError(true);
+    }).finally(() => {
+      clearTimeout(timeout);
+      if (!cancelled) setProvidersLoading(false);
     });
-    return () => { cancelled = true; clearTimeout(timeout); };
-  }, []);
+    return () => { cancelled = true; clearTimeout(timeout); ctrl.abort(); };
+  }, [providerReload]);
 
   React.useEffect(() => {
     if (!generating || !jobId) return;
@@ -421,7 +426,9 @@ export default function ContentCreator() {
       )}
 
       {providersLoading && <p className="muted" role="status">Loading media providers…</p>}
-      {err && <div className="errors" role="alert">{err}</div>}
+      {err && <div className="errors" role="alert">{err}
+        {providerError && <button style={{ marginLeft: 12 }} onClick={() => setProviderReload(n => n + 1)}>Retry</button>}
+      </div>}
     </div>
   );
 }
