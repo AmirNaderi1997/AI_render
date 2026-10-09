@@ -40,8 +40,12 @@ async def lifespan(app: FastAPI):
         log.info("Database connected")
     else:
         log.info("Running in JSON fallback mode (no DATABASE_URL)")
-    missing = [name for name in ("elevenlabs", "faster_whisper")
-               if importlib.util.find_spec(name) is None]
+    optional_runtimes = []
+    if settings.WHISPER_ENABLED:
+        optional_runtimes.append("faster_whisper")
+    if settings.TTS_PROVIDER.strip().lower() == "elevenlabs":
+        optional_runtimes.append("elevenlabs")
+    missing = [name for name in optional_runtimes if importlib.util.find_spec(name) is None]
     if missing:
         log.warning(
             "Python runtime %s is missing %s; start the backend with "
@@ -50,7 +54,7 @@ async def lifespan(app: FastAPI):
             ", ".join(missing),
         )
     else:
-        log.info("Python runtime %s has ElevenLabs and Whisper available", sys.executable)
+        log.info("Python runtime %s has configured optional audio runtimes available", sys.executable)
     n = jobstore.rescan()
     log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
     yield

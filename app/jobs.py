@@ -410,7 +410,7 @@ def _run_generate(
             if transcript["file_hash"] != file_hash(raw_path):
                 raise ValueError("saved transcript belongs to another video")
         else:
-            wm = whisper_model or os.getenv("WHISPER_MODEL")
+            wm = whisper_model or os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL")
             from brain.correct import load_glossary
             from brain.glossary import build_initial_prompt
             _glossary = load_glossary()

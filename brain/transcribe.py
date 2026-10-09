@@ -5,7 +5,9 @@ import hashlib
 import json
 import logging
 import os
+import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +16,54 @@ load_dotenv()
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "small"
+_DEFAULT_MODEL = "base"
+
+
+class WhisperTimeoutError(TimeoutError):
+    """Raised when the local Whisper runtime exceeds its configured budget."""
+
+
+class _whisper_timeout:
+    """Interrupt a local Whisper operation on POSIX worker main threads.
+
+    faster-whisper may block while downloading a model or while iterating its
+    lazy segment iterator. SIGALRM stops both cases without leaving a hanging
+    executor thread behind. Other platforms retain the call but log the
+    limitation instead of pretending a timeout was enforced.
+    """
+    def __init__(self, seconds: int):
+        self.seconds = max(1, seconds)
+        self.enabled = False
+        self.previous = None
+
+    def __enter__(self):
+        if hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread():
+            self.previous = signal.getsignal(signal.SIGALRM)
+            signal.signal(signal.SIGALRM, self._expired)
+            signal.setitimer(signal.ITIMER_REAL, self.seconds)
+            self.enabled = True
+        else:
+            log.warning("Whisper timeout cannot be enforced outside the POSIX main thread")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.enabled:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, self.previous)
+        return False
+
+    @staticmethod
+    def _expired(signum, frame):
+        raise WhisperTimeoutError("Whisper timed out")
+
+
+def _whisper_timeout_seconds() -> int:
+    raw = os.environ.get("WHISPER_TIMEOUT_SECONDS", "120")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        log.warning("invalid WHISPER_TIMEOUT_SECONDS=%r; using 120 seconds", raw)
+        return 120
 
 
 def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None) -> str:
@@ -278,22 +327,51 @@ def _transcribe_whisper(
     try:
         from faster_whisper import WhisperModel
     except ImportError:
+        # Preserve an audio-only artifact for diagnostics even when the
+        # optional ASR runtime was not installed in this environment.
+        import subprocess
+        fallback_wav = out_dir / "audio_tmp.wav"
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "pcm_s16le",
+                 "-ar", "16000", "-ac", "1", str(fallback_wav)],
+                capture_output=True, check=True, timeout=30,
+            )
+            log.info("FFmpeg audio extraction completed while Whisper was unavailable for %s", video.name)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("FFmpeg audio extraction also failed while Whisper was unavailable for %s (%s)", video.name, type(exc).__name__)
+        finally:
+            fallback_wav.unlink(missing_ok=True)
         return empty_transcript(
             f"faster-whisper is not installed in the API Python environment ({sys.executable})"
         )
-    log.info("loading whisper model %r (device=%s, compute=%s)", model_size, device, compute_type)
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    log.info("model cache dir: %s", model.model_path if hasattr(model, "model_path") else "unknown")
 
-    log.info("transcribing %s (whisper) …", video.name)
-
+    # Always prove that the source audio can be extracted before depending on
+    # an optional model runtime. This produces a useful, non-blocking fallback
+    # for environments where model downloads are blocked.
     import subprocess
     wav_path = out_dir / "audio_tmp.wav"
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "pcm_s16le",
-         "-ar", "16000", "-ac", "1", str(wav_path)],
-        capture_output=True, check=True,
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(video), "-vn", "-acodec", "pcm_s16le",
+             "-ar", "16000", "-ac", "1", str(wav_path)],
+            capture_output=True, check=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        wav_path.unlink(missing_ok=True)
+        return empty_transcript(f"FFmpeg audio extraction failed ({type(exc).__name__})")
+
+    timeout_seconds = _whisper_timeout_seconds()
+    try:
+        log.info("loading whisper model %r (device=%s, compute=%s, timeout=%ss)", model_size, device, compute_type, timeout_seconds)
+        with _whisper_timeout(timeout_seconds):
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    except Exception as exc:
+        wav_path.unlink(missing_ok=True)
+        return empty_transcript(f"Whisper model unavailable ({type(exc).__name__}: {exc})")
+    log.info("model cache dir: %s", model.model_path if hasattr(model, "model_path") else "unknown")
+
+    log.info("transcribing %s (whisper, timeout=%ss) …", video.name, timeout_seconds)
 
     import wave
     import numpy as np
@@ -301,33 +379,36 @@ def _transcribe_whisper(
         with wave.open(str(wav_path), "rb") as wav:
             audio = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
             audio = audio.astype(np.float32) / 32768.0
-        segments_iter, info = _try_hotwords(
-            model, audio, language=language,
-            initial_prompt=initial_prompt or None,
-            hotwords=hotwords or [],
-        )
-        words: list[dict] = []
-        sentences: list[dict] = []
-        for seg in segments_iter:
-            if not seg.words:
-                continue
-            segment_words = []
-            for w in seg.words:
-                entry = {"w": _normalize_persian(w.word.strip()), "start": round(w.start, 3),
-                         "end": round(w.end, 3), "prob": round(w.probability, 3)}
-                words.append(entry)
-                segment_words.append(entry)
-            sentences.append({"text": " ".join(w["w"] for w in segment_words),
-                              "start": segment_words[0]["start"],
-                              "end": segment_words[-1]["end"]})
+        with _whisper_timeout(timeout_seconds):
+            segments_iter, info = _try_hotwords(
+                model, audio, language=language,
+                initial_prompt=initial_prompt or None,
+                hotwords=hotwords or [],
+            )
+            words: list[dict] = []
+            sentences: list[dict] = []
+            for seg in segments_iter:
+                if not seg.words:
+                    continue
+                segment_words = []
+                for w in seg.words:
+                    entry = {"w": _normalize_persian(w.word.strip()), "start": round(w.start, 3),
+                             "end": round(w.end, 3), "prob": round(w.probability, 3)}
+                    words.append(entry)
+                    segment_words.append(entry)
+                sentences.append({"text": " ".join(w["w"] for w in segment_words),
+                                  "start": segment_words[0]["start"],
+                                  "end": segment_words[-1]["end"]})
 
-        alt_words = _second_decode(model, audio, language=language)
-        if len(alt_words) == len(words):
-            for i, (w_entry, alt) in enumerate(zip(words, alt_words)):
-                if alt and alt != w_entry["w"]:
-                    w_entry["alt_w"] = alt
-            log.info("second decode: %d word(s) differ",
-                     sum(1 for w in words if "alt_w" in w))
+            alt_words = _second_decode(model, audio, language=language)
+            if len(alt_words) == len(words):
+                for i, (w_entry, alt) in enumerate(zip(words, alt_words)):
+                    if alt and alt != w_entry["w"]:
+                        w_entry["alt_w"] = alt
+                log.info("second decode: %d word(s) differ",
+                         sum(1 for w in words if "alt_w" in w))
+    except Exception as exc:
+        return empty_transcript(f"Whisper transcription skipped ({type(exc).__name__}: {exc})")
     finally:
         wav_path.unlink(missing_ok=True)
 
@@ -410,23 +491,39 @@ def transcribe(
             elevenlabs_error = exc
             selected_engine = "whisper"
 
-    model_size = model_size or ("medium" if language == "fa" else _DEFAULT_MODEL)
-    initial_prompt = (initial_prompt or "").strip()[:500]
+    if os.environ.get("WHISPER_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
+        model_size = model_size or os.environ.get("WHISPER_MODEL_SIZE") or os.environ.get("WHISPER_MODEL") or _DEFAULT_MODEL
+        # Reuse the safe local fallback writer so disabled ASR leaves the same
+        # transcript contract as a missing runtime.
+        from engine.probe import has_audio, probe_duration
+        transcript = {
+            "file_hash": fhash, "cache_key": transcript_key(fhash, model_size, language, device, compute_type, initial_prompt),
+            "engine": "none", "model_size": model_size, "requested_language": language,
+            "initial_prompt": (initial_prompt or "").strip()[:500], "language": language or "unknown",
+            "duration": round(probe_duration(video), 3) if has_audio(video) else 0.0,
+            "words": [], "sentences": [], "fallback_reason": "Whisper skipped because WHISPER_ENABLED=false",
+        }
+        transcript_path.write_text(json.dumps(transcript, indent=2, ensure_ascii=False))
+        log.warning("Whisper skipped for %s because WHISPER_ENABLED=false", video.name)
+        result = transcript
+    else:
+        model_size = model_size or os.environ.get("WHISPER_MODEL_SIZE") or os.environ.get("WHISPER_MODEL") or _DEFAULT_MODEL
+        initial_prompt = (initial_prompt or "").strip()[:500]
 
-    try:
-        result = _transcribe_whisper(
-            video, out_dir, fhash, model_size, language,
-            device, compute_type, initial_prompt, hotwords,
-        )
-    except Exception as whisper_error:
-        if elevenlabs_error is not None:
-            raise RuntimeError(
-                "ElevenLabs transcription failed "
-                f"({type(elevenlabs_error).__name__}: {elevenlabs_error}); "
-                "Whisper fallback also failed "
-                f"({type(whisper_error).__name__}: {whisper_error})"
-            ) from whisper_error
-        raise
+        try:
+            result = _transcribe_whisper(
+                video, out_dir, fhash, model_size, language,
+                device, compute_type, initial_prompt, hotwords,
+            )
+        except Exception as whisper_error:
+            if elevenlabs_error is not None:
+                raise RuntimeError(
+                    "ElevenLabs transcription failed "
+                    f"({type(elevenlabs_error).__name__}: {elevenlabs_error}); "
+                    "Whisper fallback also failed "
+                    f"({type(whisper_error).__name__}: {whisper_error})"
+                ) from whisper_error
+            raise
 
     cost_path = out_dir / "asr_cost.json"
     cost_path.write_text(json.dumps({

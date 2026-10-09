@@ -61,6 +61,40 @@ def test_tts_retries_connection_timeout_without_leaving_partial_audio(tmp_path, 
     assert len(list(tmp_path.glob("narration_*.mp3"))) == 1
 
 
+def test_edge_tts_is_primary_and_never_calls_elevenlabs(tmp_path, monkeypatch):
+    from brain import tts
+    async def generate(text, output, voice, rate):
+        Path(output).write_bytes(b"edge-audio")
+    monkeypatch.setenv("TTS_PROVIDER", "edge-tts")
+    monkeypatch.setenv("TTS_VOICE", "en-US-GuyNeural")
+    monkeypatch.setattr(tts, "_generate_async", generate)
+    monkeypatch.setattr(tts, "_get_audio_duration", lambda _: 1.0)
+    monkeypatch.setattr(tts, "_generate_elevenlabs", lambda *_: (_ for _ in ()).throw(AssertionError("must not call ElevenLabs")))
+    result = tts.generate_narration("Hello", tmp_path)
+    assert Path(result.file_path).read_bytes() == b"edge-audio"
+
+
+def test_blocked_elevenlabs_falls_back_to_edge_tts(tmp_path, monkeypatch):
+    from brain import tts
+    async def generate(text, output, voice, rate):
+        Path(output).write_bytes(b"edge-audio")
+    monkeypatch.setenv("TTS_PROVIDER", "elevenlabs")
+    monkeypatch.setattr(tts, "_generate_elevenlabs", lambda *_: (_ for _ in ()).throw(RuntimeError("blocked")))
+    monkeypatch.setattr(tts, "_generate_async", generate)
+    monkeypatch.setattr(tts, "_get_audio_duration", lambda _: 1.0)
+    result = tts.generate_narration("Hello", tmp_path)
+    assert Path(result.file_path).read_bytes() == b"edge-audio"
+
+
+def test_disabled_tts_skips_narration(tmp_path, monkeypatch):
+    from brain import tts
+    monkeypatch.setenv("TTS_PROVIDER", "disabled")
+    result = tts.generate_narration("Hello", tmp_path)
+    assert result.file_path == ""
+    assert result.duration_s == 0.0
+    assert not list(tmp_path.iterdir())
+
+
 def test_captions_follow_actual_generated_scene_durations(tmp_path):
     sb = Storyboard(prompt="test", content_type="reel", language="en", style="rafiei_reel",
                     scenes=[Scene(index=0, description="a", duration_s=5, text_overlay="One"),

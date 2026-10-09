@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     SAROVI_TTS_MODEL: str = ""
     SAROVI_TTS_VOICE: str = ""
     TTS_VOICE_ID: str = ""
+    # TTS_PROVIDER is deliberately independent of optional image/text providers.
+    # Edge TTS works without an API key and is the default in restricted networks.
+    TTS_PROVIDER: str = "edge-tts"
+    TTS_VOICE: str = "en-US-GuyNeural"
     TTS_RATE: str = "+0%"
     JARVIS_API_KEY: str = ""
     JARVIS_BASE_URL: str = ""
@@ -30,6 +34,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     ELEVENLABS_API_KEY: str = ""
+    ELEVENLABS_VOICE_ID: str = ""
+    WHISPER_ENABLED: bool = True
+    WHISPER_MODEL_SIZE: str = "base"
+    WHISPER_TIMEOUT_SECONDS: int = 120
     JOBS_DIR: str = "jobs"
     ASSETS_DIR: str = "assets"
     PRESETS_DIR: str = "presets"

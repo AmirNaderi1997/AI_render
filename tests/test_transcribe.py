@@ -61,6 +61,17 @@ def test_missing_whisper_uses_empty_transcript_fallback(tmp_path, monkeypatch):
     assert "faster-whisper is not installed" in result["fallback_reason"]
 
 
+def test_whisper_can_be_disabled_without_loading_the_runtime(tmp_path, monkeypatch):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"test video data")
+    monkeypatch.setenv("WHISPER_ENABLED", "false")
+    with patch("engine.probe.has_audio", return_value=True), \
+         patch("engine.probe.probe_duration", return_value=2.0):
+        result = transcribe(video, tmp_path, language="en", engine="whisper")
+    assert result["engine"] == "none"
+    assert result["fallback_reason"] == "Whisper skipped because WHISPER_ENABLED=false"
+
+
 def test_elevenlabs_and_whisper_failures_are_both_reported(tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"test video data")

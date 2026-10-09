@@ -5,6 +5,7 @@ import json
 import hashlib
 import logging
 import math
+import os
 import subprocess
 import threading
 import time
@@ -41,10 +42,18 @@ def _load_checkpoint(path: Path, signature: str, provider_name: str) -> dict:
 
 
 def _voice_provider() -> str:
-    configured = settings.CONTENT_VOICE_PROVIDER.strip().lower()
+    # TTS_PROVIDER is the current explicit narration contract. Keep an
+    # explicitly configured legacy Sarovi route working until it is migrated.
+    configured_tts = os.environ.get("TTS_PROVIDER", settings.TTS_PROVIDER).strip().lower()
+    if configured_tts not in ("edge-tts", "elevenlabs", "disabled"):
+        raise ValueError("TTS_PROVIDER must be edge-tts, elevenlabs, or disabled")
+    if os.environ.get("TTS_PROVIDER") is not None:
+        return configured_tts
+    configured = os.environ.get("CONTENT_VOICE_PROVIDER", settings.CONTENT_VOICE_PROVIDER).strip().lower()
     if configured not in ("auto", "sarovi", "edge"):
         raise ValueError("CONTENT_VOICE_PROVIDER must be auto, sarovi, or edge")
-    return "sarovi" if configured == "sarovi" or (configured == "auto" and settings.SAROVI_API_KEY.strip()) else "edge"
+    sarovi_configured = os.environ.get("SAROVI_API_KEY", "").strip()
+    return "sarovi" if configured == "sarovi" or (configured == "auto" and sarovi_configured) else "edge"
 
 
 def create_content(
@@ -268,7 +277,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         voice_settings = (
             f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
             if voice_provider == "sarovi"
-            else f"{settings.TTS_VOICE_ID}:{settings.TTS_RATE}"
+            else f"{os.environ.get('TTS_VOICE', settings.TTS_VOICE)}:{settings.TTS_RATE}"
         )
         voice_signature = f"{voice_provider}:{voice_settings}"
         if checkpoint.get("voice_signature") != voice_signature:
@@ -278,38 +287,42 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
             n["scene_index"]: n for n in checkpoint["narration"]
             if isinstance(n, dict) and Path(n.get("file_path", "")).is_file()
         }
-        try:
-            if voice_provider == "sarovi":
-                from .sarovi_voice import generate_narration
-            else:
-                from .tts import generate_narration
-            for scene in storyboard.scenes:
-                if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
-                    continue
-                try:
-                    if scene.index in cached_narration:
-                        record = cached_narration[scene.index]
-                    else:
-                        voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
-                        voice_kwargs = {"voice_id": voice} if voice_provider == "edge" and voice and voice != "default" else {}
-                        tts_result = generate_narration(scene.narration_text, gen_dir, **voice_kwargs)
-                        record = {
-                            "scene_index": scene.index,
-                            "file_path": tts_result.file_path,
-                            "duration_s": tts_result.duration_s,
-                            "provider": voice_provider,
-                        }
-                    if preset["is_static"]:
-                        record = _fit_post_narration(record, gen_dir, warnings)
-                    narration_segments.append(record)
-                    cached_narration[scene.index] = record
-                    checkpoint["narration"] = [cached_narration[index] for index in sorted(cached_narration)]
-                    _save_checkpoint(checkpoint_path, checkpoint)
-                except Exception as tts_exc:
-                    raise RuntimeError(f"Voiceover failed for scene {scene.index + 1}: {tts_exc}") from tts_exc
-        except ImportError as exc:
-            if any(scene.narration_text for scene in storyboard.scenes):
-                raise RuntimeError(f"Voiceover requires the {voice_provider} provider") from exc
+        if voice_provider == "disabled":
+            log.info("narration skipped for generated content because TTS_PROVIDER=disabled")
+            warnings.append("Narration skipped because TTS_PROVIDER=disabled")
+        else:
+            try:
+                if voice_provider == "sarovi":
+                    from .sarovi_voice import generate_narration
+                else:
+                    from .tts import generate_narration
+                for scene in storyboard.scenes:
+                    if not isinstance(scene.narration_text, str) or not scene.narration_text.strip():
+                        continue
+                    try:
+                        if scene.index in cached_narration:
+                            record = cached_narration[scene.index]
+                        else:
+                            voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
+                            voice_kwargs = {"voice_id": voice} if voice_provider in ("edge", "edge-tts") and voice and voice != "default" else {}
+                            tts_result = generate_narration(scene.narration_text, gen_dir, **voice_kwargs)
+                            record = {
+                                "scene_index": scene.index,
+                                "file_path": tts_result.file_path,
+                                "duration_s": tts_result.duration_s,
+                                "provider": voice_provider,
+                            }
+                        if preset["is_static"]:
+                            record = _fit_post_narration(record, gen_dir, warnings)
+                        narration_segments.append(record)
+                        cached_narration[scene.index] = record
+                        checkpoint["narration"] = [cached_narration[index] for index in sorted(cached_narration)]
+                        _save_checkpoint(checkpoint_path, checkpoint)
+                    except Exception as tts_exc:
+                        raise RuntimeError(f"Voiceover failed for scene {scene.index + 1}: {tts_exc}") from tts_exc
+            except ImportError as exc:
+                if any(scene.narration_text for scene in storyboard.scenes):
+                    raise RuntimeError(f"Voiceover requires the {voice_provider} provider") from exc
 
         if preset["is_static"]:
             if not generated_media:

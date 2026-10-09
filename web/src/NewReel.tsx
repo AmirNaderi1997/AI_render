@@ -34,7 +34,7 @@ export default function NewReel() {
     React.useState<"auto" | "none" | "crossfade" | "directional">("auto");
   const [transitionRequest, setTransitionRequest] = React.useState("");
   const [language, setLanguage] = React.useState("fa");
-  const [whisperModel, setWhisperModel] = React.useState("medium");
+  const [whisperModel, setWhisperModel] = React.useState("base");
   const [asrEngine, setAsrEngine] = React.useState("auto");
   const [transcriptionHint, setTranscriptionHint] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -243,7 +243,8 @@ export default function NewReel() {
             </label>
             {asrEngine !== "elevenlabs" && <label>Whisper model
               <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
-                <option value="medium">medium (recommended)</option>
+                <option value="base">base (default, faster download)</option>
+                <option value="medium">medium (higher accuracy)</option>
                 <option value="small">small (faster)</option>
                 <option value="large-v3">large-v3 (slower)</option>
               </select>
