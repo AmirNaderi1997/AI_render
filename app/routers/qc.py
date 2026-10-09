@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from app import jobs as jobstore
 from app.job_access import get_job_for_request
+from app.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/jobs", tags=["qc"])
 
 
 @router.post("/{job_id}/qc/run", status_code=202)
-def run_qc(job_id: str, request: Request):
+def run_qc(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     try:
         jobstore.start_qc(job)
@@ -21,7 +23,7 @@ def run_qc(job_id: str, request: Request):
 
 
 @router.get("/{job_id}/qc/status")
-def qc_status(job_id: str, request: Request):
+def qc_status(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     q = job.qc
     return {

@@ -5,6 +5,7 @@ Run: .venv/bin/python -m uvicorn app.main:app --reload --port 8000
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import asyncio
 import importlib.util
 import json
 import logging
@@ -12,6 +13,8 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
+import subprocess
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +27,7 @@ configure_structured_logging()
 
 from . import auth, jobs as jobstore
 from .auth_routes import router as auth_router
-from .database import DB_AVAILABLE, init_db
+from .database import DB_AVAILABLE, close_db, init_db
 from .config import settings
 from .routers import content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
 
@@ -36,8 +39,16 @@ async def lifespan(app: FastAPI):
     if settings.APP_ENV == "production" and (not settings.JWT_SECRET or not DB_AVAILABLE or not settings.REDIS_URL):
         raise RuntimeError("Production requires JWT_SECRET, DATABASE_URL, and REDIS_URL")
     if DB_AVAILABLE:
-        await init_db(create_schema=not production)
-        log.info("Database connected")
+        # Schema ownership belongs to Alembic. Run it before serving so a new
+        # app process cannot receive requests against an old schema.
+        await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            check=True,
+            cwd=str(Path(__file__).resolve().parents[1]),
+        )
+        await init_db(create_schema=False)
+        log.info("Database connected and migrations are current")
     else:
         log.info("Running in JSON fallback mode (no DATABASE_URL)")
     optional_runtimes = []
@@ -58,6 +69,7 @@ async def lifespan(app: FastAPI):
     n = jobstore.rescan()
     log.info("job registry rescan: loaded %d job(s) from %s", n, jobstore.JOBS_ROOT)
     yield
+    await close_db()
 
 
 production = settings.APP_ENV == "production"

@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from engine.schema import validate_plan
 from app import jobs as jobstore
 from app.job_access import get_job_for_request, require_job_access
+from app.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/jobs", tags=["plans"])
 
@@ -18,7 +20,7 @@ class PlanBody(BaseModel):
 
 
 @router.put("/{job_id}/plan", dependencies=[Depends(require_job_access)])
-def put_plan(job_id: str, body: PlanBody, request: Request):
+def put_plan(job_id: str, body: PlanBody, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     _, errors = jobstore.save_plan(job, body.plan)
     if errors:
@@ -52,7 +54,7 @@ class GenerateBody(BaseModel):
 
 
 @router.post("/{job_id}/generate-plan")
-def generate_plan(job_id: str, request: Request, body: GenerateBody = GenerateBody()):
+def generate_plan(job_id: str, request: Request, body: GenerateBody = GenerateBody(), db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     if not job.raw_name:
         raise HTTPException(400, "no raw video uploaded")
@@ -81,7 +83,7 @@ def generate_plan(job_id: str, request: Request, body: GenerateBody = GenerateBo
 
 
 @router.get("/{job_id}/generate-plan/status")
-def generate_status(job_id: str, request: Request):
+def generate_status(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     g = job.generate
     return {
@@ -193,7 +195,6 @@ def reject_correction(job_id: str, body: RejectCorrectionBody, request: Request)
 @router.get("/{job_id}/plan.json")
 def download_plan(job_id: str, request: Request):
     job = get_job_for_request(request, job_id)
-    p = job.dir / "plan.json"
-    if not p.exists():
+    if job.plan_data is None:
         raise HTTPException(404, "no plan")
-    return FileResponse(p, filename="plan.json", media_type="application/json")
+    return JSONResponse(job.plan_data, headers={"Content-Disposition": 'attachment; filename="plan.json"'})

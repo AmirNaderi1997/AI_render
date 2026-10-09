@@ -2,7 +2,9 @@
 
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Float, ForeignKey, String, Text
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -24,19 +26,60 @@ class UserModel(Base):
     reset_expires: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
-class JobModel(Base):
+class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    source_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="new")
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    plan_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    settings_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[str] = mapped_column(String(50))
-    updated_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    stage: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="")
+    progress_pct: Mapped[int] = mapped_column(Integer, default=0)
+    source_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    # Compatibility state keeps the public job JSON stable while its canonical
+    # persistence moves out of the old status.json sidecar.
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Keep the original migration's ISO-string timestamp representation so
+    # existing installations upgrade without an in-place type rewrite.
+    created_at: Mapped[str] = mapped_column(String(50), default=lambda: datetime.utcnow().isoformat())
+    updated_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True,
+                                                       onupdate=lambda: datetime.utcnow().isoformat())
+
+
+# Backwards-compatible import name for the existing auth/content code.
+JobModel = Job
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), unique=True, index=True)
+    scenes: Mapped[list] = mapped_column(JSON, default=list)
+    captions: Mapped[list] = mapped_column(JSON, default=list)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class RenderResult(Base):
+    __tablename__ = "render_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    output_path: Mapped[str] = mapped_column(String(1000))
+    format: Mapped[str] = mapped_column(String(50), default="mp4")
+    duration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class QCResult(Base):
+    __tablename__ = "qc_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    scores: Mapped[dict] = mapped_column(JSON, default=dict)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class StyleProfileModel(Base):

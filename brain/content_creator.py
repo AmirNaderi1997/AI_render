@@ -435,8 +435,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         plan_data["generation_meta"]["music_source"] = music_source
         if music_source == "sarovi_lyria" and plan_data.get("music"):
             plan_data["music"]["volume_db"] = -18.0
-        plan_path = job.dir / "plan.json"
-        plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
+        job.plan_data = plan_data
 
         job.raw_name = None
         _write_status(job)

@@ -302,7 +302,7 @@ def create_session(job, *, force_refresh: bool = False) -> dict[str, Any]:
         },
     }
     # Add music file to command if plan has music
-    plan_data = json.loads((job.dir / "plan.json").read_text())
+    plan_data = jobstore.load_plan(job)
     if plan_data.get("music") and plan_data["music"].get("file"):
         music_path = Path(plan_data["music"]["file"])
         if not music_path.is_absolute():

@@ -83,11 +83,12 @@ def safe_file(job, path: Path) -> Path:
 
 
 def current_identity(job, *, regenerate: bool) -> dict:
-    plan_file = safe_file(job, job.dir / 'plan.json')
     plan, errors = validate_plan(jobstore.load_plan(job), base_dir=job.dir, check_media=True)
     if errors:
         raise HTTPException(422, errors)
-    plan_hash = sha256(plan_file)
+    plan_hash = hashlib.sha256(
+        json.dumps(jobstore.load_plan(job), sort_keys=True, ensure_ascii=False).encode('utf-8')
+    ).hexdigest()
     if regenerate:
         for name in (PREMIERE_XML, PREMIERE_CAPTIONS, PREMIERE_REPORT, PREMIERE_BUNDLE):
             if (job.dir / name).is_symlink():
@@ -163,9 +164,10 @@ def status(job) -> dict:
     except HTTPException as exc:
         result['editable_plan'] = 'stale' if exc.status_code == 409 else 'missing'
         result['warnings'] = [str(exc.detail)]
-        plan_path = job.dir / 'plan.json'
         if (job.render.status == 'done' and job.render.output and not job.render.preview and
-                plan_path.is_file() and job.render.plan_sha256 != sha256(plan_path)):
+                job.plan_data is not None and job.render.plan_sha256 != hashlib.sha256(
+                    json.dumps(job.plan_data, sort_keys=True, ensure_ascii=False).encode()
+                ).hexdigest()):
             result['final_render'] = 'outdated'
         if record:
             result['saved_project'] = 'outdated'

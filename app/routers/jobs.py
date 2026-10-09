@@ -5,8 +5,10 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
 from app import jobs as jobstore
 from app.job_access import get_job_for_request
 from .music import AUDIO_EXTENSIONS
@@ -17,9 +19,9 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.get("")
-def list_jobs(request: Request):
+def list_jobs(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = str(request.state.user.id)
-    return [j.to_dict() for j in jobstore.list_jobs()
+    return [j.to_dict() for j in jobstore.list_jobs(db=db)
             if j.user_id is None or str(j.user_id) == user_id]
 
 
@@ -30,6 +32,7 @@ async def create_job(
     plan: Optional[UploadFile] = File(None),
     plan_text: Optional[str] = Form(None),
     music: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db),
 ):
     # Reject empty uploads before allocating a persistent job directory.
     try:
@@ -40,7 +43,7 @@ async def create_job(
         video_size = None
     if video_size == 0:
         raise HTTPException(422, "Video upload is empty")
-    job = jobstore.create_job(user_id=request.state.user.id)
+    job = jobstore.create_job(user_id=request.state.user.id, db=db)
     try:
         # UploadFile is a spooled temp file: stream it to disk, never .read() it whole.
         jobstore.save_raw(job, video.filename or "raw.mp4", video.file)
@@ -83,12 +86,11 @@ async def create_job(
 
 
 @router.get("/{job_id}")
-def get_job(job_id: str, request: Request):
+def get_job(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     d = job.to_dict()
-    plan_path = job.dir / "plan.json"
-    if plan_path.exists():
-        d["plan"] = json.loads(plan_path.read_text())
+    if job.plan_data is not None:
+        d["plan"] = job.plan_data
     transcript_path = job.dir / "transcript.json"
     if transcript_path.exists():
         d["has_transcript"] = True
@@ -96,13 +98,12 @@ def get_job(job_id: str, request: Request):
 
 
 @router.get("/{job_id}/raw")
-def get_raw(job_id: str, request: Request):
+def get_raw(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id, missing="no raw video")
     if not job.raw_name:
         # Generated jobs have a source clip but deliberately have no raw upload.
-        plan_path = job.dir / "plan.json"
-        if plan_path.is_file():
-            plan = json.loads(plan_path.read_text())
+        plan = job.plan_data
+        if plan:
             if plan.get("source_type") == "generated" and plan.get("source"):
                 source = Path(plan["source"])
                 source = (source if source.is_absolute() else job.dir / source).resolve()

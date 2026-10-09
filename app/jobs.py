@@ -1,9 +1,10 @@
-"""In-memory job registry + background render worker.
+"""PostgreSQL-backed job registry + background render worker.
 
-One job = one folder under jobs/<id>/ with subdirs raw/, exports/ and files
-plan.json, project.mlt, captions.ass, status.json.
+One job has a media-only directory under ``JOBS_DIR/<id>`` (uploads, renders,
+and editor artifacts). Durable metadata and progress are database records.
 """
 from __future__ import annotations
+import asyncio
 import json
 import hashlib
 import shutil
@@ -16,6 +17,9 @@ from typing import Optional
 
 from app.celery_app import CELERY_AVAILABLE
 from app.config import settings
+from app.database import AsyncSessionLocal, DB_AVAILABLE
+from app.models import Job as JobRecord, Plan as PlanRecord, QCResult, RenderResult
+from sqlalchemy import select
 from engine.build_mlt import build
 from engine.premiere import build_premiere
 from engine.render import render as run_render, export_poster
@@ -23,7 +27,11 @@ from engine.schema import validate_plan
 
 
 JOBS_ROOT = Path(settings.JOBS_DIR).expanduser()
-JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_jobs_root() -> None:
+    """Create the configured media mount lazily, not while importing modules."""
+    JOBS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -80,50 +88,153 @@ class Job:
     generate: GenerateState = field(default_factory=GenerateState)
     qc: QCState = field(default_factory=QCState)
     versions: list[str] = field(default_factory=list)
+    plan_data: Optional[dict] = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["dir"] = str(self.dir)
+        d.pop("plan_data", None)
         return d
 
 
 _jobs: dict[str, Job] = {}
 _lock = threading.Lock()
+_db_loop: asyncio.AbstractEventLoop | None = None
+_db_loop_ready = threading.Event()
+_db_loop_lock = threading.Lock()
+
+
+def _database_loop() -> asyncio.AbstractEventLoop:
+    """Return one loop for all sync registry calls.
+
+    asyncpg connections are bound to their creating event loop. A persistent
+    loop avoids the cross-loop failure caused by creating a new loop for every
+    FastAPI/Celery status update.
+    """
+    global _db_loop
+    with _db_loop_lock:
+        if _db_loop is None:
+            def serve() -> None:
+                global _db_loop
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                _db_loop = loop
+                _db_loop_ready.set()
+                loop.run_forever()
+            threading.Thread(target=serve, name="job-db-loop", daemon=True).start()
+    _db_loop_ready.wait()
+    assert _db_loop is not None
+    return _db_loop
+
+
+def _job_status(job: Job) -> tuple[str, str, str, int]:
+    """Flatten the active operation for indexed list/detail queries."""
+    for name, state in (("render", job.render), ("generate", job.generate), ("qc", job.qc)):
+        if state.status in {"queued", "running", "error"}:
+            return state.status, getattr(state, "stage", "") or name, state.message, getattr(state, "progress", 0)
+    if job.render.status == "done":
+        return "done", "render", job.render.message, job.render.progress
+    if job.generate.status == "done":
+        return "done", "generate", job.generate.message, 100
+    return "new", "", "", 0
+
+
+def _job_from_record(record: JobRecord, plan_data: Optional[dict] = None) -> Job:
+    state = record.state or {}
+    payload = state.get("job", state)
+    render = payload.get("render") or {}
+    generate = payload.get("generate") or {}
+    qc = payload.get("qc") or {}
+    return Job(
+        id=record.id,
+        dir=JOBS_ROOT / record.id,
+        user_id=str(record.user_id) if record.user_id is not None else None,
+        raw_name=payload.get("raw_name"),
+        plan_name="plan.json",
+        render=RenderState(**{k: render.get(k, getattr(RenderState(), k)) for k in RenderState.__dataclass_fields__}),
+        generate=GenerateState(**{k: generate.get(k, getattr(GenerateState(), k)) for k in GenerateState.__dataclass_fields__}),
+        qc=QCState(**{k: qc.get(k, getattr(QCState(), k)) for k in QCState.__dataclass_fields__}),
+        versions=list(payload.get("versions") or []),
+        plan_data=plan_data,
+    )
+
+
+async def _persist_job(job: Job) -> None:
+    if AsyncSessionLocal is None:
+        return
+    status, stage, message, progress = _job_status(job)
+    state = job.to_dict()
+    state.pop("dir", None)
+    state.pop("plan_data", None)
+    async with AsyncSessionLocal() as db:
+        record = await db.get(JobRecord, job.id)
+        if record is None:
+            record = JobRecord(id=job.id, user_id=int(job.user_id) if job.user_id else None,
+                               title=None, source_path=(f"raw/{job.raw_name}" if job.raw_name else None),
+                               status=status, stage=stage, message=message, progress_pct=progress,
+                               state={"job": state})
+            db.add(record)
+        else:
+            record.status, record.stage, record.message, record.progress_pct = status, stage, message, progress
+            record.source_path = f"raw/{job.raw_name}" if job.raw_name else record.source_path
+            record.state = {"job": state}
+        if job.plan_data is not None:
+            plan = (await db.execute(select(PlanRecord).where(PlanRecord.job_id == job.id))).scalar_one_or_none()
+            if plan is None:
+                plan = PlanRecord(job_id=job.id, scenes=job.plan_data.get("segments", []),
+                                  captions=job.plan_data.get("captions", []), data=job.plan_data)
+                db.add(plan)
+            else:
+                plan.scenes, plan.captions, plan.data = job.plan_data.get("segments", []), job.plan_data.get("captions", []), job.plan_data
+        if job.render.status == "done" and job.render.output:
+            exists = (await db.execute(select(RenderResult).where(RenderResult.job_id == job.id,
+                RenderResult.output_path == f"exports/{job.render.output}"))).scalar_one_or_none()
+            if exists is None:
+                db.add(RenderResult(job_id=job.id, output_path=f"exports/{job.render.output}", format="mp4", duration=None))
+        if job.qc.status == "done":
+            db.add(QCResult(job_id=job.id,
+                            scores={"current_round": job.qc.current_round, "total_issues": job.qc.total_issues,
+                                    "fixed_issues": job.qc.fixed_issues}, issues=job.qc.issues))
+        await db.commit()
+
+
+def _await_db(coro):
+    """Run async SQLAlchemy work from legacy sync routes, threads, or Celery."""
+    return asyncio.run_coroutine_threadsafe(coro, _database_loop()).result()
 
 
 def _write_status(job: Job) -> None:
-    status_path = job.dir / "status.json"
-    payload = json.dumps(job.to_dict(), indent=2)
-    if CELERY_AVAILABLE:
-        # The API may read while a worker is writing; publish a complete file.
-        temporary = job.dir / f".status-{uuid.uuid4().hex}.tmp"
-        try:
-            temporary.write_text(payload)
-            temporary.replace(status_path)
-        finally:
-            temporary.unlink(missing_ok=True)
-    else:
-        status_path.write_text(payload)
+    """Persist job state to PostgreSQL; status.json is intentionally not written."""
+    if DB_AVAILABLE:
+        _await_db(_persist_job(job))
+    with _lock:
+        _jobs[job.id] = job
 
 
-def create_job(user_id: Optional[str] = None) -> Job:
+def create_job(user_id: Optional[str] = None, db=None) -> Job:
+    _ensure_jobs_root()
     jid = uuid.uuid4().hex[:12]
     d = JOBS_ROOT / jid
     (d / "raw").mkdir(parents=True, exist_ok=True)
     (d / "exports").mkdir(parents=True, exist_ok=True)
     job = Job(id=jid, dir=d, user_id=str(user_id) if user_id is not None else None)
-    with _lock:
-        _jobs[jid] = job
     _write_status(job)
     return job
 
 
-def get(job_id: str) -> Optional[Job]:
-    if CELERY_AVAILABLE:
-        # Workers run in other processes, so the persisted status is authoritative.
-        if Path(job_id).name != job_id:
-            return None
-        job = _job_from_status(JOBS_ROOT / job_id, reset_stale=False)
+def get(job_id: str, db=None) -> Optional[Job]:
+    if Path(job_id).name != job_id:
+        return None
+    if DB_AVAILABLE:
+        async def load():
+            assert AsyncSessionLocal is not None
+            async with AsyncSessionLocal() as db:
+                record = await db.get(JobRecord, job_id)
+                if record is None:
+                    return None
+                plan = (await db.execute(select(PlanRecord).where(PlanRecord.job_id == job_id))).scalar_one_or_none()
+                return _job_from_record(record, plan.data if plan else None)
+        job = _await_db(load())
         if job is not None:
             with _lock:
                 _jobs[job_id] = job
@@ -132,82 +243,42 @@ def get(job_id: str) -> Optional[Job]:
         return _jobs.get(job_id)
 
 
-def list_jobs() -> list[Job]:
-    if CELERY_AVAILABLE:
-        rescan()
+def list_jobs(db=None) -> list[Job]:
+    if DB_AVAILABLE:
+        async def load_all():
+            assert AsyncSessionLocal is not None
+            async with AsyncSessionLocal() as db:
+                records = (await db.execute(select(JobRecord).order_by(JobRecord.created_at.desc()))).scalars().all()
+                plans = {p.job_id: p.data for p in (await db.execute(select(PlanRecord))).scalars()}
+                return [_job_from_record(record, plans.get(record.id)) for record in records]
+        jobs = _await_db(load_all())
+        with _lock:
+            _jobs.clear(); _jobs.update({job.id: job for job in jobs})
+        return jobs
     with _lock:
         return list(_jobs.values())
 
 
-def _job_from_status(d: Path, *, reset_stale: bool) -> Optional[Job]:
-    status_p = d / "status.json"
-    if not status_p.is_file():
-        return None
-    try:
-        s = json.loads(status_p.read_text())
-    except (OSError, ValueError, TypeError):
-        return None
-    jid = s.get("id") or d.name
-    raw_name = s.get("raw_name")
-    if not raw_name:
-        raws = sorted((d / "raw").glob("*")) if (d / "raw").exists() else []
-        raw_name = raws[0].name if raws else None
-    exports_dir = d / "exports"
-    fs_versions = sorted(p.name for p in exports_dir.glob("v*.mp4")) if exports_dir.exists() else []
-    versions = s.get("versions") or fs_versions
-    r_state = s.get("render") or {}
-    if reset_stale and r_state.get("status") in ("running", "queued"):
-        r_state = {**r_state, "status": "idle", "progress": 0, "message": ""}
-    render_state = RenderState(**{
-        k: r_state.get(k, getattr(RenderState(), k))
-        for k in RenderState.__dataclass_fields__
-    })
-    g_state = s.get("generate") or {}
-    if reset_stale and g_state.get("status") == "running":
-        g_state = {**g_state, "status": "idle", "stage": "", "message": ""}
-    gen_state = GenerateState(**{
-        k: g_state.get(k, getattr(GenerateState(), k))
-        for k in GenerateState.__dataclass_fields__
-    })
-    q_state = s.get("qc") or {}
-    if reset_stale and q_state.get("status") == "running":
-        q_state = {**q_state, "status": "idle", "message": ""}
-    qc_state = QCState(**{
-        k: q_state.get(k, getattr(QCState(), k))
-        for k in QCState.__dataclass_fields__
-    })
-    return Job(
-        id=jid,
-        dir=d,
-        user_id=str(s["user_id"]) if s.get("user_id") is not None else None,
-        raw_name=raw_name,
-        plan_name=s.get("plan_name", "plan.json"),
-        render=render_state,
-        generate=gen_state,
-        qc=qc_state,
-        versions=list(versions),
-    )
+def get_job(job_id: str, db=None) -> Optional[Job]:
+    """Public CRUD alias retained for route-level dependency injection."""
+    return get(job_id, db=db)
+
+
+def update_job(job: Job, db=None) -> Job:
+    """Persist a mutated job state without changing its public JSON shape."""
+    _write_status(job)
+    return job
 
 
 def rescan(root: Optional[Path] = None) -> int:
-    """Rebuild the in-memory registry from disk. Returns the number of jobs loaded.
-
-    A job directory is any immediate subdirectory of JOBS_ROOT with a status.json.
-    Missing fields fall back to filesystem state (raw/<file>, exports/*.mp4).
-    """
-    r = Path(root) if root else JOBS_ROOT
-    if not r.exists():
-        return 0
-    loaded = 0
+    """Refresh the process-local cache from PostgreSQL."""
+    if DB_AVAILABLE:
+        return len(list_jobs())
+    # Non-production mode deliberately has no durable fallback. It is useful
+    # for isolated unit tests, but a restart cannot pretend file status is
+    # authoritative after the database migration.
     with _lock:
-        _jobs.clear()
-        for d in sorted(p for p in r.iterdir() if p.is_dir()):
-            job = _job_from_status(d, reset_stale=not CELERY_AVAILABLE)
-            if job is None:
-                continue
-            _jobs[job.id] = job
-            loaded += 1
-    return loaded
+        return len(_jobs)
 
 
 def save_raw(job: Job, filename: str, src) -> Path:
@@ -238,22 +309,15 @@ def save_plan(job: Job, data: dict) -> tuple[Optional[dict], list[str]]:
     plan, errs = validate_plan(data, base_dir=job.dir, check_media=True)
     if errs:
         return None, errs
-    path = job.dir / "plan.json"
-    try:
-        unchanged = json.loads(path.read_text()) == data
-    except (OSError, ValueError):
-        unchanged = False
-    if not unchanged:
-        path.write_text(json.dumps(data, indent=2))
+    job.plan_data = data
     _write_status(job)
     return data, []
 
 
 def load_plan(job: Job) -> dict:
-    plan_path = job.dir / "plan.json"
-    if not plan_path.is_file():
+    if job.plan_data is None:
         raise FileNotFoundError("plan.json not found — generate or upload a plan first")
-    return json.loads(plan_path.read_text())
+    return job.plan_data
 
 
 def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> None:
@@ -298,15 +362,8 @@ def start_generate(
         if job.generate.status == "running":
             return
         locked_transitions: list[dict] = []
-        existing_plan = job.dir / "plan.json"
-        if existing_plan.is_file():
-            try:
-                locked_transitions = [
-                    dict(item) for item in json.loads(existing_plan.read_text()).get("transitions", [])
-                    if item.get("locked")
-                ]
-            except (OSError, ValueError, TypeError):
-                locked_transitions = []
+        if job.plan_data:
+            locked_transitions = [dict(item) for item in job.plan_data.get("transitions", []) if item.get("locked")]
         style_ref = None
         style_profile = None
         if style_id:
@@ -482,14 +539,7 @@ def _run_generate(
             _, errors = validate_plan(plan_data, base_dir=job.dir, check_media=True)
             if errors:
                 raise ValueError("; ".join(errors))
-            plan_path = job.dir / "plan.json"
-            if plan_path.exists():
-                history = job.dir / "plans"
-                history.mkdir(exist_ok=True)
-                (history / f"plan-{int(time.time() * 1000)}.json").write_bytes(
-                    plan_path.read_bytes()
-                )
-            plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
+            job.plan_data = plan_data
             job.generate.status = "done"
             job.generate.stage = ""
             job.generate.message = "plan generated without subtitles"
@@ -538,13 +588,7 @@ def _run_generate(
         job.generate.message = "validating plan…"
         _write_status(job)
 
-        plan_path = job.dir / "plan.json"
-        if plan_path.exists():
-            history = job.dir / "plans"
-            history.mkdir(exist_ok=True)
-            backup = history / f"plan-{int(time.time() * 1000)}.json"
-            backup.write_bytes(plan_path.read_bytes())
-        plan_path.write_text(json.dumps(plan_data, indent=2, ensure_ascii=False))
+        job.plan_data = plan_data
 
         job.generate.status = "done"
         job.generate.stage = ""
@@ -645,7 +689,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         _write_status(job)
 
         data = load_plan(job)
-        render_plan_sha256 = hashlib.sha256((job.dir / "plan.json").read_bytes()).hexdigest()
+        render_plan_sha256 = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         plan, errs = validate_plan(data, base_dir=job.dir, check_media=True)
         if errs:
             raise ValueError("; ".join(errs))

@@ -3,6 +3,7 @@
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy import text
 
 from app.config import settings
@@ -10,7 +11,10 @@ from app.models import Base
 
 
 if settings.DATABASE_URL:
-    engine = create_async_engine(settings.DATABASE_URL, pool_size=10, max_overflow=20)
+    # Requests, Celery workers, and legacy synchronous render callbacks can
+    # legitimately use different event loops. NullPool prevents asyncpg
+    # connections created in one loop from being reused in another.
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
     DB_AVAILABLE = True
 else:
@@ -19,9 +23,12 @@ else:
     DB_AVAILABLE = False
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db() -> AsyncGenerator[AsyncSession | None, None]:
     if AsyncSessionLocal is None:
-        raise RuntimeError("DATABASE_URL is not configured")
+        # Development/test fallback has no durable store; production startup
+        # rejects this configuration before requests are served.
+        yield None
+        return
     async with AsyncSessionLocal() as session:
         yield session
 
@@ -34,3 +41,8 @@ async def init_db(*, create_schema: bool = True) -> None:
             await conn.run_sync(Base.metadata.create_all)
         else:
             await conn.execute(text("SELECT 1"))
+
+
+async def close_db() -> None:
+    if engine is not None:
+        await engine.dispose()

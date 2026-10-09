@@ -46,9 +46,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://airender:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/airender
       - REDIS_URL=redis://redis:6379/0
       - APP_ENV=${APP_ENV:-development}
-      - JOBS_DIR=/app/jobs
+      - JOBS_DIR=/app/job_data
     volumes:
-      - job_data:/app/jobs
+      - job_data:/app/job_data
       - ./assets:/app/assets:ro
       - ./presets:/app/presets:ro
       - ./samples:/app/samples:ro
@@ -74,9 +74,9 @@ services:
       - DATABASE_URL=postgresql+asyncpg://airender:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/airender
       - REDIS_URL=redis://redis:6379/0
       - APP_ENV=${APP_ENV:-development}
-      - JOBS_DIR=/app/jobs
+      - JOBS_DIR=/app/job_data
     volumes:
-      - job_data:/app/jobs
+      - job_data:/app/job_data
       - ./assets:/app/assets:ro
       - ./presets:/app/presets:ro
       - ./samples:/app/samples:ro
@@ -132,7 +132,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - APP_ENV=${APP_ENV:-development}
     volumes:
-      - job_data:/app/jobs
+      - job_data:/app/job_data
     depends_on:
       db:
         condition: service_healthy

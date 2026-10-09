@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     WHISPER_ENABLED: bool = True
     WHISPER_MODEL_SIZE: str = "base"
     WHISPER_TIMEOUT_SECONDS: int = 120
-    JOBS_DIR: str = "jobs"
+    # Media artifacts only: uploads, rendered outputs and editable exports.
+    # Job metadata/status is persisted in PostgreSQL.
+    JOBS_DIR: str = "/app/job_data"
     ASSETS_DIR: str = "assets"
     PRESETS_DIR: str = "presets"
     APP_ENV: str = "development"

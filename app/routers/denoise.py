@@ -25,7 +25,7 @@ class DenoiseAdjustBody(BaseModel):
 
 def _sync_denoise_plan(job, state) -> None:
     """Persist the user's denoise decision in the plan consumed by MLT/Premiere."""
-    if not (job.dir / "plan.json").is_file():
+    if job.plan_data is None:
         return
     data = jobstore.load_plan(job)
     if state.approved:

@@ -1,19 +1,21 @@
 """Render API routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from engine.kdenlive import open_in_kdenlive
 from app import jobs as jobstore
 from app.job_access import get_job_for_request
+from app.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/jobs", tags=["render"])
 
 
 @router.post("/{job_id}/render", status_code=202)
-def render(job_id: str, request: Request, preview: bool = False, loudnorm: bool = False):
+def render(job_id: str, request: Request, preview: bool = False, loudnorm: bool = False, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
-    if not (job.dir / "plan.json").exists():
+    if job.plan_data is None:
         raise HTTPException(400, "no plan.json for this job")
     try:
         jobstore.start_render(job, preview=preview, loudnorm=loudnorm)
@@ -23,7 +25,7 @@ def render(job_id: str, request: Request, preview: bool = False, loudnorm: bool 
 
 
 @router.get("/{job_id}/render/status")
-def render_status(job_id: str, request: Request):
+def render_status(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     return {
         "status": job.render.status,
