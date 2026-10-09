@@ -55,7 +55,7 @@ async def create_job(
         fname = music.filename or "music.mp3"
         ext = Path(fname).suffix.lower()
         if ext not in AUDIO_EXTENSIONS:
-            raise HTTPException(422, f"Music format not supported: {ext}. Use mp3, wav, aac, or m4a.")
+            raise HTTPException(422, f"Music format not supported: {ext}. Use mp3, wav, ogg, aac, or m4a.")
         try:
             music.file.seek(0, 2)
             music_size = music.file.tell()

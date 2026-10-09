@@ -8,13 +8,14 @@ import shutil
 import tempfile
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from app import jobs as jobstore
 from app.job_access import require_job_access
 
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".aac", ".m4a"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".aac", ".m4a"}
 
 router = APIRouter(prefix="/jobs", tags=["music"], dependencies=[Depends(require_job_access)])
 legacy_router = APIRouter(tags=["music"])
@@ -81,6 +82,13 @@ class GenerateMusicBody(BaseModel):
     prompt: str
 
 
+class MixBody(BaseModel):
+    """Mix settings; omitted fields fall back to the defaults (30% / 2s in / 3s out)."""
+    volume_level: float = Field(0.3, ge=0.0, le=1.0)
+    fade_in_seconds: float = Field(2.0, ge=0.0, le=60.0)
+    fade_out_seconds: float = Field(3.0, ge=0.0, le=60.0)
+
+
 @legacy_router.put("/library/{category}/{filename}")
 def update_library_asset(category: str, filename: str, body: UpdateAssetBody):
     from engine.library import update_asset_tags, CATEGORIES
@@ -132,7 +140,7 @@ async def upload_music(job_id: str, file: UploadFile = File(...)):
     fname = file.filename or "music.mp3"
     ext = Path(fname).suffix.lower()
     if ext not in AUDIO_EXTENSIONS:
-        raise HTTPException(422, f"Music format not supported: {ext}. Use mp3, wav, aac, or m4a.")
+        raise HTTPException(422, f"Music format not supported: {ext}. Use mp3, wav, ogg, aac, or m4a.")
     try:
         file.file.seek(0, 2)
         size = file.file.tell()
@@ -189,11 +197,132 @@ async def generate_music(job_id: str, body: GenerateMusicBody):
     return {"ok": True, "path": f"music/{dst.name}"}
 
 
-@router.get("/{job_id}/music/preview")
-def preview_music(job_id: str, filename: Optional[str] = None):
+def _music_status(job) -> dict:
+    m = job.music
+    return {
+        "attached": bool(m.file), "file": m.file, "name": m.name, "duration_s": m.duration_s,
+        "volume_level": m.volume, "fade_in_seconds": m.fade_in, "fade_out_seconds": m.fade_out,
+        "status": m.status, "progress": m.progress, "message": m.message,
+        "output": m.output, "mixed_from": m.mixed_from,
+    }
+
+
+@router.post("/{job_id}/music")
+async def attach_music(job_id: str, file: UploadFile = File(...)):
+    """Upload a track and attach it to the job (replaces any attached track)."""
     job = jobstore.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
+    fname = file.filename or "music.mp3"
+    ext = Path(fname).suffix.lower()
+    if ext not in AUDIO_EXTENSIONS:
+        raise HTTPException(422, f"Music format not supported: {ext}. Use mp3, wav, ogg, aac, or m4a.")
+    try:
+        file.file.seek(0, 2)
+        size = file.file.tell()
+        file.file.seek(0)
+    except (AttributeError, OSError):
+        size = None
+    if size == 0:
+        raise HTTPException(422, "Music upload is empty")
+    if size is not None and size > 100_000_000:
+        raise HTTPException(413, "Music file must be at most 100 MB")
+    from brain.music import probe_music
+    with tempfile.NamedTemporaryFile(suffix=ext) as pending:
+        shutil.copyfileobj(file.file, pending)
+        pending.flush()
+        try:
+            duration = probe_music(Path(pending.name))
+        except ValueError as exc:
+            raise HTTPException(422, "Music file has no playable audio") from exc
+        pending.seek(0)
+        dst = jobstore.save_music(job, f"attached_{uuid.uuid4().hex[:8]}{ext}", pending)
+    try:
+        jobstore.attach_music(job, f"music/{dst.name}", Path(fname).name, duration)
+    except ValueError as exc:
+        dst.unlink(missing_ok=True)
+        raise HTTPException(409, str(exc)) from exc
+    return _music_status(job)
+
+
+@router.post("/{job_id}/music/mix", status_code=202)
+def mix_music(job_id: str, body: MixBody = MixBody()):
+    """Mix the attached track into the latest render in the background."""
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    try:
+        jobstore.start_music_mix(job, body.volume_level, body.fade_in_seconds, body.fade_out_seconds)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "no music attached") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": job.music.status}
+
+
+@router.get("/{job_id}/music/status")
+def music_status(job_id: str):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    return _music_status(job)
+
+
+@router.delete("/{job_id}/music")
+def remove_music(job_id: str):
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    try:
+        jobstore.detach_music(job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"ok": True}
+
+
+def _mixed_preview(job, volume_level, fade_in_seconds, fade_out_seconds):
+    from brain.music import MusicMixError, build_preview
+    m = job.music
+    music = job.dir / m.file
+    if not music.is_file():
+        raise HTTPException(404, "music file not found")
+    video = None
+    if job.render.output and (job.dir / "exports" / job.render.output).is_file():
+        video = job.dir / "exports" / job.render.output
+    elif job.raw_name and (job.dir / "raw" / job.raw_name).is_file():
+        video = job.dir / "raw" / job.raw_name
+    with tempfile.NamedTemporaryFile(suffix=".m4a", delete=False) as handle:
+        out = Path(handle.name)
+    try:
+        build_preview(
+            video, music, out,
+            volume_level=m.volume if volume_level is None else volume_level,
+            fade_in_seconds=m.fade_in if fade_in_seconds is None else fade_in_seconds,
+            fade_out_seconds=m.fade_out if fade_out_seconds is None else fade_out_seconds,
+        )
+    except (MusicMixError, ValueError) as exc:
+        out.unlink(missing_ok=True)
+        raise HTTPException(422, str(exc)) from exc
+    return FileResponse(out, media_type="audio/mp4", filename="music_preview.m4a",
+                        background=BackgroundTask(out.unlink, missing_ok=True))
+
+
+@router.get("/{job_id}/music/preview")
+def preview_music(
+    job_id: str,
+    filename: Optional[str] = None,
+    volume_level: Optional[float] = Query(None, ge=0.0, le=1.0),
+    fade_in_seconds: Optional[float] = Query(None, ge=0.0, le=60.0),
+    fade_out_seconds: Optional[float] = Query(None, ge=0.0, le=60.0),
+):
+    """With ?filename= returns that raw upload. Otherwise, when a track is
+    attached, returns a 30-second preview of the mix (query params override the
+    saved settings); with nothing attached it falls back to the first upload."""
+    job = jobstore.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    if filename is None and getattr(getattr(job, "music", None), "file", None):
+        return _mixed_preview(job, volume_level, fade_in_seconds, fade_out_seconds)
     music_dir = job.dir / "music"
     if not music_dir.is_dir():
         raise HTTPException(404, "no music uploaded")

@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import math
 import zipfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
@@ -24,6 +26,15 @@ PREMIERE_CAPTIONS = "premiere_captions.srt"
 PREMIERE_REPORT = "premiere_transition_report.json"
 PREMIERE_BUNDLE = "project_premiere.zip"
 PREMIERE_VERIFICATION = "premiere_native_verification.json"
+
+
+@dataclass(frozen=True)
+class AttachedMusic:
+    """Background music attached to a job (separate from plan.music)."""
+    file: Path
+    volume: float = 0.3      # linear, 0.0-1.0
+    fade_in: float = 2.0     # seconds
+    fade_out: float = 3.0    # seconds
 
 _CAPABILITY_EVIDENCE = {
     "application": "Adobe Premiere Pro",
@@ -678,6 +689,56 @@ def validate_manifest(report: dict) -> None:
                 raise ValueError(f"caption[{index}] missing {key}")
 
 
+def _audio_clipitem(track: ET.Element, fps: int, *, clip_id: str, file_id: str, label: str,
+                    path: Path, pathurl: str, start: int, frames: int, file_frames: int,
+                    define_file: bool = True) -> ET.Element:
+    """Add an audio clipitem with an "Audio Levels" filter; return its level <parameter>."""
+    clip = ET.SubElement(track, "clipitem", {"id": clip_id})
+    _text(clip, "name", label)
+    _text(clip, "duration", frames)
+    _rate(clip, fps)
+    _text(clip, "start", start)
+    _text(clip, "end", start + frames)
+    _text(clip, "in", 0)
+    _text(clip, "out", frames)
+
+    file_node = ET.SubElement(clip, "file", {"id": file_id})
+    if define_file:  # repeat uses of one file reference it by id only
+        _text(file_node, "name", path.name)
+        _text(file_node, "pathurl", pathurl)
+        _rate(file_node, fps)
+        _text(file_node, "duration", file_frames)
+        media = ET.SubElement(file_node, "media")
+        audio = ET.SubElement(media, "audio")
+        sample = ET.SubElement(audio, "samplecharacteristics")
+        _text(sample, "depth", 16)
+        _text(sample, "samplerate", 48000)
+        _text(audio, "channelcount", 2)
+
+    source_track = ET.SubElement(clip, "sourcetrack")
+    _text(source_track, "mediatype", "audio")
+    _text(source_track, "trackindex", 1)
+
+    volume_filter = ET.SubElement(clip, "filter")
+    effect = ET.SubElement(volume_filter, "effect")
+    _text(effect, "name", "Audio Levels")
+    _text(effect, "effectid", "audiolevels")
+    _text(effect, "effectcategory", "Audio")
+    _text(effect, "effecttype", "audio")
+    _text(effect, "mediatype", "audio")
+
+    param = ET.SubElement(effect, "parameter", {"authoringApp": "PremierePro"})
+    _text(param, "parameterid", "level")
+    _text(param, "name", "Level")
+    return param
+
+
+def _keyframe(param: ET.Element, when: int, value: object) -> None:
+    kf = ET.SubElement(param, "keyframe")
+    _text(kf, "when", when)
+    _text(kf, "value", value)
+
+
 def _music_track(plan: EditPlan, audio_parent: ET.Element, base: Path,
                  pathurl: str) -> Path | None:
     """Add a music audio track to the FCP7 XML if the plan has music. Returns the music file path."""
@@ -690,43 +751,10 @@ def _music_track(plan: EditPlan, audio_parent: ET.Element, base: Path,
     output_frames = plan.output_frames
 
     track = ET.SubElement(audio_parent, "track")
-    clip = ET.SubElement(track, "clipitem", {"id": "audio-music"})
-    _text(clip, "name", f"Music · {music_path.name}")
-    _text(clip, "duration", output_frames)
-    _rate(clip, fps)
-    _text(clip, "start", 0)
-    _text(clip, "end", output_frames)
-    _text(clip, "in", 0)
-    _text(clip, "out", output_frames)
-
-    file_node = ET.SubElement(clip, "file", {"id": "music-file-1"})
-    _text(file_node, "name", music_path.name)
-    _text(file_node, "pathurl", pathurl)
-    _rate(file_node, fps)
-    _text(file_node, "duration", output_frames)
-    media = ET.SubElement(file_node, "media")
-    audio = ET.SubElement(media, "audio")
-    sample = ET.SubElement(audio, "samplecharacteristics")
-    _text(sample, "depth", 16)
-    _text(sample, "samplerate", 48000)
-    _text(audio, "channelcount", 2)
-
-    source_track = ET.SubElement(clip, "sourcetrack")
-    _text(source_track, "mediatype", "audio")
-    _text(source_track, "trackindex", 1)
-
     # Volume filter with ducking keyframes
-    volume_filter = ET.SubElement(clip, "filter")
-    effect = ET.SubElement(volume_filter, "effect")
-    _text(effect, "name", "Audio Levels")
-    _text(effect, "effectid", "audiolevels")
-    _text(effect, "effectcategory", "Audio")
-    _text(effect, "effecttype", "audio")
-    _text(effect, "mediatype", "audio")
-
-    param = ET.SubElement(effect, "parameter", {"authoringApp": "PremierePro"})
-    _text(param, "parameterid", "level")
-    _text(param, "name", "Level")
+    param = _audio_clipitem(
+        track, fps, clip_id="audio-music", file_id="music-file-1", label=f"Music · {music_path.name}",
+        path=music_path, pathurl=pathurl, start=0, frames=output_frames, file_frames=output_frames)
 
     base_db = plan.music.volume_db
     if plan.music.duck:
@@ -756,6 +784,58 @@ def _music_track(plan: EditPlan, audio_parent: ET.Element, base: Path,
     _text(track, "enabled", "TRUE")
     _text(track, "locked", "FALSE")
     return music_path
+
+
+_SILENCE_DB = -60
+
+
+def _linear_to_db(volume: float) -> float:
+    return _SILENCE_DB if volume <= 0 else max(_SILENCE_DB, round(20 * math.log10(volume), 2))
+
+
+def _attached_music_track(plan: EditPlan, audio_parent: ET.Element, attached: AttachedMusic,
+                          pathurl: str) -> Path | None:
+    """Add the attached background music as its own audio track.
+
+    Mirrors the ffmpeg mix: the track is repeated until it covers the sequence,
+    the volume is the mix volume, and the fades are Audio Levels keyframes (fade
+    in on the first clip, fade out on the last).
+    """
+    from .probe import probe_duration
+    path = Path(attached.file)
+    if not path.is_file():
+        return None
+    fps, total = plan.canvas.fps, plan.output_frames
+    music_frames = max(1, round(probe_duration(path) * fps))
+    fade_in, fade_out = round(attached.fade_in * fps), round(attached.fade_out * fps)
+    if fade_in + fade_out > total:  # same proportional shrink as brain.music
+        scale = total / (fade_in + fade_out)
+        fade_in, fade_out = int(fade_in * scale), int(fade_out * scale)
+    base_db = _linear_to_db(attached.volume)
+
+    track = ET.SubElement(audio_parent, "track")
+    position, index = 0, 0
+    while position < total:
+        frames = min(music_frames, total - position)
+        param = _audio_clipitem(
+            track, fps, clip_id=f"audio-attached-music-{index}", file_id="attached-music-file-1",
+            label=f"Background Music · {path.name}", path=path, pathurl=pathurl,
+            start=position, frames=frames, file_frames=music_frames, define_file=index == 0)
+        _text(param, "value", base_db)
+        first, last = index == 0, position + frames >= total
+        if first and fade_in > 0:
+            fi = min(fade_in, frames)
+            _keyframe(param, 0, _SILENCE_DB)
+            _keyframe(param, fi, base_db)
+        if last and fade_out > 0:
+            fo = min(fade_out, frames)
+            _keyframe(param, frames - fo, base_db)
+            _keyframe(param, frames, _SILENCE_DB)
+        position += frames
+        index += 1
+    _text(track, "enabled", "TRUE")
+    _text(track, "locked", "FALSE")
+    return path
 
 
 def _sfx_tracks(plan: EditPlan, audio_parent: ET.Element, base: Path,
@@ -814,8 +894,12 @@ def _sfx_tracks(plan: EditPlan, audio_parent: ET.Element, base: Path,
     return paths
 
 
-def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None) -> Path:
-    """Write XML, SRT, report and zip bundle; return the bundle path."""
+def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None,
+                   attached_music: AttachedMusic | None = None) -> Path:
+    """Write XML, SRT, report and zip bundle; return the bundle path.
+
+    `attached_music` (the job's post-render background music) becomes an extra
+    audio track next to any plan.music track."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     base = Path(base_dir) if base_dir else out_dir
@@ -827,6 +911,8 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None) 
     if plan.music:
         media_paths.append(_resolve(plan.music.file, base))
     media_paths.extend(_resolve(item.file, base) for item in plan.sfx)
+    if attached_music is not None and Path(attached_music.file).is_file():
+        media_paths.append(Path(attached_music.file))
     for path in media_paths:
         resolved = path.resolve()
         if resolved not in bundled_media:
@@ -852,6 +938,10 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None) 
         plan, audio_container, base,
         bundled_media[_resolve(plan.music.file, base).resolve()] if plan.music else "",
     )
+    attached_path = None
+    if attached_music is not None and Path(attached_music.file).is_file():
+        attached_path = _attached_music_track(
+            plan, audio_container, attached_music, bundled_media[Path(attached_music.file).resolve()])
     sfx_paths = _sfx_tracks(plan, audio_container, base, bundled_media)
 
     xml_path = out_dir / PREMIERE_XML
@@ -882,7 +972,8 @@ def build_premiere(plan: EditPlan, out_dir: Path, base_dir: Path | None = None) 
     with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in (xml_path, srt_path, report_path):
             archive.write(path, arcname=path.name)
-        for path in dict.fromkeys([source, *([music_path] if music_path else []), *sfx_paths]):
+        for path in dict.fromkeys([source, *([music_path] if music_path else []),
+                                   *([attached_path] if attached_path else []), *sfx_paths]):
             if path.is_file():
                 archive.write(path, arcname=bundled_media[path.resolve()])
         if denoise_audio_path:

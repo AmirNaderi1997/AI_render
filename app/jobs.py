@@ -21,7 +21,7 @@ from app.database import AsyncSessionLocal, DB_AVAILABLE
 from app.models import Job as JobRecord, Plan as PlanRecord, QCResult, RenderResult
 from sqlalchemy import select
 from engine.build_mlt import build
-from engine.premiere import build_premiere
+from engine.premiere import AttachedMusic, build_premiere
 from engine.render import render as run_render, export_poster
 from engine.schema import validate_plan
 
@@ -78,6 +78,24 @@ class QCState:
 
 
 @dataclass
+class MusicState:
+    """Attached background music and the status of its post-render mix."""
+    file: Optional[str] = None    # job-relative path, e.g. music/attached_ab12.mp3
+    name: Optional[str] = None    # original upload name, for display
+    duration_s: float = 0.0
+    volume: float = 0.3           # 0.0-1.0
+    fade_in: float = 2.0
+    fade_out: float = 3.0
+    status: str = "idle"          # idle | queued | running | done | error
+    progress: int = 0
+    message: str = ""
+    output: Optional[str] = None  # mixed file in exports/; render.output is left untouched
+    mixed_from: Optional[str] = None
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+
+
+@dataclass
 class Job:
     id: str
     dir: Path
@@ -87,6 +105,7 @@ class Job:
     render: RenderState = field(default_factory=RenderState)
     generate: GenerateState = field(default_factory=GenerateState)
     qc: QCState = field(default_factory=QCState)
+    music: MusicState = field(default_factory=MusicState)
     versions: list[str] = field(default_factory=list)
     plan_data: Optional[dict] = field(default=None, repr=False)
 
@@ -145,6 +164,7 @@ def _job_from_record(record: JobRecord, plan_data: Optional[dict] = None) -> Job
     render = payload.get("render") or {}
     generate = payload.get("generate") or {}
     qc = payload.get("qc") or {}
+    music = payload.get("music") or {}
     return Job(
         id=record.id,
         dir=JOBS_ROOT / record.id,
@@ -154,6 +174,7 @@ def _job_from_record(record: JobRecord, plan_data: Optional[dict] = None) -> Job
         render=RenderState(**{k: render.get(k, getattr(RenderState(), k)) for k in RenderState.__dataclass_fields__}),
         generate=GenerateState(**{k: generate.get(k, getattr(GenerateState(), k)) for k in GenerateState.__dataclass_fields__}),
         qc=QCState(**{k: qc.get(k, getattr(QCState(), k)) for k in QCState.__dataclass_fields__}),
+        music=MusicState(**{k: music.get(k, getattr(MusicState(), k)) for k in MusicState.__dataclass_fields__}),
         versions=list(payload.get("versions") or []),
         plan_data=plan_data,
     )
@@ -320,14 +341,119 @@ def load_plan(job: Job) -> dict:
     return job.plan_data
 
 
+def _clear_mix(job: Job) -> None:
+    """Forget the mixed output (keeps the attached track and its settings)."""
+    job.music.status, job.music.progress, job.music.message = "idle", 0, ""
+    job.music.output = job.music.mixed_from = None
+    job.music.started_at = job.music.finished_at = None
+
+
+def attach_music(job: Job, rel_path: str, name: str, duration_s: float) -> None:
+    """Attach a validated track, replacing (and deleting) any previous one."""
+    with _lock:
+        _guard_music_edit(job)
+        stale = [job.music.file if job.music.file != rel_path else None,
+                 f"exports/{job.music.output}" if job.music.output else None]
+        job.music.file, job.music.name, job.music.duration_s = rel_path, name, duration_s
+        _clear_mix(job)
+        _write_status(job)
+    for rel in filter(None, stale):
+        (job.dir / rel).unlink(missing_ok=True)
+
+
+def detach_music(job: Job) -> None:
+    """Remove the attached track and its mixed output from the job."""
+    with _lock:
+        _guard_music_edit(job)
+        paths = [p for p in (job.music.file, f"exports/{job.music.output}" if job.music.output else None) if p]
+        job.music = MusicState()
+        _write_status(job)
+    for rel in paths:
+        (job.dir / rel).unlink(missing_ok=True)
+
+
+def attached_music(job: Job) -> Optional[AttachedMusic]:
+    """The job's attached background music for the Premiere export, if its file exists."""
+    m = getattr(job, "music", None)
+    if m is None or not m.file or not (job.dir / m.file).is_file():
+        return None
+    return AttachedMusic(file=job.dir / m.file, volume=m.volume, fade_in=m.fade_in, fade_out=m.fade_out)
+
+
+def _guard_music_edit(job: Job) -> None:
+    # Render and mix threads write their own copy of the job, so editing the
+    # attachment meanwhile would be overwritten by their next status write.
+    if job.render.status in {"queued", "running"}:
+        raise ValueError("wait for the render to finish")
+    if job.music.status in {"queued", "running"}:
+        raise ValueError("wait for the music mix to finish")
+
+
+def start_music_mix(job: Job, volume: float, fade_in: float, fade_out: float) -> None:
+    """Save the mix settings and mix the attached music into the latest render."""
+    from brain.music import validate_params
+    volume, fade_in, fade_out = validate_params(volume, fade_in, fade_out)
+    with _lock:
+        _guard_music_edit(job)
+        if not job.music.file or not (job.dir / job.music.file).is_file():
+            raise FileNotFoundError("no music attached")
+        if job.render.status != "done" or not job.render.output:
+            raise ValueError("render the video before applying music")
+        job.music.volume, job.music.fade_in, job.music.fade_out = volume, fade_in, fade_out
+        job.music.status, job.music.progress, job.music.message = "queued", 0, ""
+        job.music.output = job.music.mixed_from = None
+        job.music.started_at, job.music.finished_at = time.time(), None
+        _write_status(job)
+    if CELERY_AVAILABLE:
+        from app.tasks import task_mix_music
+        task_mix_music.delay(job.id)
+    else:
+        threading.Thread(target=_run_mix, args=(job,), daemon=True).start()
+
+
+def _run_mix(job: Job, *, raise_errors: bool = False) -> None:
+    """Mix `job.music` into the latest render. Never changes `job.render`."""
+    try:
+        from brain.music import mix_job_music
+        music, source = job.music, job.render.output
+        if not music.file or not source:
+            raise ValueError("no music or render to mix")
+        music.status, music.progress, music.message = "running", 0, "mixing"
+        music.output = music.mixed_from = None  # never report a previous run's file
+        music.started_at = music.started_at or time.time()
+        _write_status(job)
+
+        def report(pct: int) -> None:
+            music.progress = pct
+            if CELERY_AVAILABLE:
+                _write_status(job)
+
+        out = mix_job_music(job.id, music.file, volume_level=music.volume, fade_in_seconds=music.fade_in,
+                            fade_out_seconds=music.fade_out, on_progress=report)
+        music.output, music.mixed_from = out.name, source
+        music.status, music.progress, music.message = "done", 100, ""
+        music.finished_at = time.time()
+        _write_status(job)
+    except Exception as exc:
+        job.music.status = "error"
+        job.music.message = "Music mix failed. Check server logs." if settings.APP_ENV == "production" else str(exc)
+        job.music.finished_at = time.time()
+        _write_status(job)
+        if raise_errors:
+            raise
+
+
 def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> None:
     with _lock:
         if job.generate.status == "running":
             raise ValueError("plan generation must finish before rendering")
         if job.render.status in {"queued", "running"}:
             return
+        if job.music.status in {"queued", "running"}:
+            raise ValueError("music mix must finish before rendering")
         # Reset QC state so stale issues don't persist
         job.qc = QCState()
+        _clear_mix(job)  # a mix of the previous render no longer matches
         job.render = RenderState(status="queued", preview=preview, loudnorm=loudnorm,
                                  started_at=time.time())
         _write_status(job)
@@ -706,7 +832,7 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
             plan, job.dir, base_dir=job.dir, style_name=plan.style,
             style_override=style_override, style_ref=style_ref,
         )
-        build_premiere(plan, job.dir, base_dir=job.dir)
+        build_premiere(plan, job.dir, base_dir=job.dir, attached_music=attached_music(job))
 
         version_n = len(job.versions) + 1
         suffix = "_preview" if preview else ""
@@ -746,6 +872,10 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         job.render.progress = 100
         job.render.finished_at = time.time()
         _write_status(job)
+        if job.music.file and (job.dir / job.music.file).is_file():
+            # Failure is recorded in job.music; the finished render stays valid.
+            job.music.started_at = time.time()
+            _run_mix(job)
     except Exception as e:
         job.render.status = "error"
         job.render.message = "Render failed. Check server logs." if settings.APP_ENV == "production" else str(e)

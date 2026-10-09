@@ -93,7 +93,7 @@ def current_identity(job, *, regenerate: bool) -> dict:
         for name in (PREMIERE_XML, PREMIERE_CAPTIONS, PREMIERE_REPORT, PREMIERE_BUNDLE):
             if (job.dir / name).is_symlink():
                 raise HTTPException(422, 'Premiere artifact path cannot be a symlink')
-        build_premiere(plan, job.dir, base_dir=job.dir)
+        build_premiere(plan, job.dir, base_dir=job.dir, attached_music=jobstore.attached_music(job))
     report_file = job.dir / PREMIERE_REPORT
     xml_file = job.dir / PREMIERE_XML
     try:

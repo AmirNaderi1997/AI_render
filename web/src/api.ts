@@ -137,6 +137,21 @@ export interface LibraryData {
   assets: LibraryAsset[];
 }
 
+export interface MusicStatus {
+  attached: boolean;
+  file: string | null;
+  name: string | null;
+  duration_s: number;
+  volume_level: number;
+  fade_in_seconds: number;
+  fade_out_seconds: number;
+  status: "idle" | "queued" | "running" | "done" | "error";
+  progress: number;
+  message: string;
+  output: string | null;
+  mixed_from: string | null;
+}
+
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   await ensureFreshToken();
   const token = getToken();
@@ -513,6 +528,31 @@ export const api = {
   },
   musicPreviewUrl(id: string, filename?: string) {
     return `${BASE}/jobs/${id}/music/preview${filename ? `?filename=${encodeURIComponent(filename)}` : ""}`;
+  },
+  // Background music mixed into the render
+  async getMusicStatus(id: string, signal?: AbortSignal): Promise<MusicStatus> {
+    return j(await authFetch(`${BASE}/jobs/${id}/music/status`, { signal }));
+  },
+  attachMusic(id: string, file: File, onProgress?: (percent: number) => void): Promise<MusicStatus> {
+    const fd = new FormData();
+    fd.append("file", file);
+    return uploadWithProgress(`${BASE}/jobs/${id}/music`, fd, onProgress);
+  },
+  async mixMusic(id: string, settings: { volume_level: number; fade_in_seconds: number; fade_out_seconds: number }): Promise<{ status: string }> {
+    return j(await authFetch(`${BASE}/jobs/${id}/music/mix`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(settings),
+    }));
+  },
+  async removeMusic(id: string): Promise<{ ok: boolean }> {
+    return j(await authFetch(`${BASE}/jobs/${id}/music`, { method: "DELETE" }));
+  },
+  musicMixPreviewUrl(id: string, settings: { volume_level: number; fade_in_seconds: number; fade_out_seconds: number }, nonce: number) {
+    const q = new URLSearchParams({
+      volume_level: String(settings.volume_level), fade_in_seconds: String(settings.fade_in_seconds),
+      fade_out_seconds: String(settings.fade_out_seconds), t: String(nonce),
+    });
+    return `${BASE}/jobs/${id}/music/preview?${q}`;
   },
   // ── Denoise ──
   async startDenoise(id: string, strength = 0.5): Promise<{ status: string }> {

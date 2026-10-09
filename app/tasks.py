@@ -79,6 +79,17 @@ if CELERY_AVAILABLE:
         )
 
 
+    @celery.task(bind=True, name="airender.mix_music", max_retries=2, default_retry_delay=30)
+    def task_mix_music(self, job_id: str) -> None:
+        from app.jobs import _run_mix
+
+        _execute(
+            self, "music mix", job_id,
+            lambda: _run_mix(_job(job_id), raise_errors=True),
+            lambda exc: _mark_job_error(job_id, "music", exc),
+        )
+
+
     @celery.task(bind=True, name="airender.generate_plan", max_retries=2, default_retry_delay=30)
     def task_generate_plan(self, job_id: str) -> None:
         from app.jobs import _run_generate

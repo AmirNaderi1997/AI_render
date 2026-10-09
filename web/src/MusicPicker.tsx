@@ -68,7 +68,7 @@ export function MusicPicker({ jobId, file, onSelect }: {
         </select>
       </label>
       <label>Upload music / بارگذاری موسیقی
-        <input type="file" accept=".mp3,.wav,.aac,.m4a" disabled={busy}
+        <input type="file" accept=".mp3,.wav,.ogg,.aac,.m4a" disabled={busy}
           onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file); e.target.value = ""; }} />
       </label>
     </div>
