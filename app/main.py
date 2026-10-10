@@ -7,7 +7,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import asyncio
 import importlib.util
-import json
 import logging
 import os
 import re
@@ -23,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 
 from logging_config import configure_structured_logging
+from request_context import request_id_from_header, request_id_var
 configure_structured_logging()
 
 from . import auth, jobs as jobstore
@@ -30,6 +30,7 @@ from .auth_routes import router as auth_router
 from .database import DB_AVAILABLE, close_db, init_db
 from .config import settings
 from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
+from .health import router as health_router
 
 log = logging.getLogger("uvicorn.error")
 
@@ -107,35 +108,22 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=not production or bool(origins),
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     if exc.status_code >= 500:
+        request.state.exception_type = type(exc).__name__
         log.error("server_error status=%s path=%s", exc.status_code, request.url.path)
         return JSONResponse({"detail": "Internal server error"}, status_code=exc.status_code)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
 
-@app.middleware("http")
-async def request_log(request: Request, call_next):
-    started = time.monotonic()
-    try:
-        response = await call_next(request)
-    except Exception:
-        log.error("unhandled request error method=%s path=%s", request.method, request.url.path)
-        raise
-    log.info(json.dumps({"event": "http_request", "method": request.method,
-                         "path": request.url.path, "status": response.status_code,
-                         "duration_ms": round((time.monotonic() - started) * 1000)}))
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
-
 app.include_router(auth_router)
+app.include_router(health_router)
 app.include_router(ai.router)
 app.include_router(jobs.router)
 app.include_router(plans.router)
@@ -164,7 +152,7 @@ async def auth_middleware(request: Request, call_next):
         return response
 
     path = request.url.path
-    if request.method == "OPTIONS" or path == "/" or path.startswith("/auth/"):
+    if request.method == "OPTIONS" or path in {"/", "/health", "/api/health/ready"} or path.startswith("/auth/"):
         return await call_next(request)
     # The CEP panel cannot hold the user's web-app JWT. These protocol routes
     # are protected by loopback checks, one-time pairing codes, and the
@@ -186,6 +174,44 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def request_log(request: Request, call_next):
+    request_id = request_id_from_header(request.headers.get("X-Request-ID"))
+    token = request_id_var.set(request_id)
+    started = time.monotonic()
+    exception_type = None
+    try:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            exception_type = type(exc).__name__
+            response = JSONResponse({"detail": "Internal server error"}, status_code=500)
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
+        exception_type = exception_type or getattr(request.state, "exception_type", None)
+        extra = {
+            "event": "http_request",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        }
+        if response.status_code >= 500:
+            extra["exception_type"] = exception_type or "HTTPException"
+            log.error("http_request", extra=extra)
+        elif duration_ms > 2000:
+            log.warning("http_request", extra=extra)
+        else:
+            log.info("http_request", extra=extra)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+    finally:
+        request_id_var.reset(token)
+
+
 @app.get("/")
 def health():
     return {"ok": True, "service": "rafiei-ai-editor", "stage": 3}
@@ -193,4 +219,4 @@ def health():
 
 @app.get("/health")
 def health_check():
-    return {"ok": True, "service": "rafiei-ai-editor", "stage": 3}
+    return {"ok": True}

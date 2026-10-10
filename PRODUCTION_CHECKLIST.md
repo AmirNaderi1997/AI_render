@@ -53,6 +53,13 @@ The working tree already contained many unrelated changes. The audit did not res
 - Validate browser login, upload, render, Hermes flows, asset caching, rate limiting, worker retries/dead letters, and logs on the real domain.
 - Implement and test production password-reset delivery, or explicitly disable and document that feature before public launch.
 
+## Health and logs
+
+- `GET /health` is the app liveness endpoint. It performs no dependency calls and is the app container healthcheck target.
+- `GET /api/health/ready` checks PostgreSQL, Redis, a cached Celery worker ping, free space on the jobs/assets filesystems (minimum `HEALTH_MIN_DISK_FREE_GB`, default 2), and ffmpeg. PostgreSQL or Redis failure returns 503; other failures return 200 with `degraded: true`. The response contains only pass/fail status and timings.
+- `GET /healthz` is nginx's public health endpoint and proxies the app's cheap `/health` liveness response; its Docker healthcheck command is unchanged.
+- Trace a request across nginx, app, Hermes, and worker logs with `docker compose logs nginx app hermes celery-worker | grep '<request_id>'`. Send `X-Request-ID` to retain a caller-generated ID, or copy the generated ID from the response header.
+
 ## Local verification performed
 
 - `docker compose config --quiet` with an audit-only password placeholder: passed.

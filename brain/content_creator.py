@@ -16,6 +16,7 @@ from typing import Optional
 
 from app.celery_app import CELERY_AVAILABLE
 from app.config import settings
+from request_context import celery_request_headers
 from engine.content_types import ContentType, get_preset
 from engine.schema import PROJECT_ROOT, validate_plan
 from .storyboard import Storyboard, Scene, generate_storyboard
@@ -179,7 +180,10 @@ def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
 
     if CELERY_AVAILABLE:
         from app.tasks import task_generate_content
-        task_generate_content.delay(job.id, {"provider_name": provider_name})
+        task_generate_content.apply_async(
+            args=(job.id, {"provider_name": provider_name}),
+            headers=celery_request_headers(),
+        )
     else:
         threading.Thread(
             target=_run_generation, args=(job.id, provider_name), daemon=True

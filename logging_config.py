@@ -8,6 +8,7 @@ import traceback
 from typing import Any
 
 from pythonjsonlogger import jsonlogger
+from request_context import RequestContextFilter
 
 
 _REDACTED = "[REDACTED]"
@@ -92,6 +93,7 @@ def configure_structured_logging() -> None:
     root = logging.getLogger()
     handler = logging.StreamHandler()
     handler.setFormatter(jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.addFilter(RequestContextFilter())
     handler.addFilter(SensitiveDataFilter())
 
     # Uvicorn and Celery configure named handlers during startup. Route their

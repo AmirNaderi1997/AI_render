@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Job metadata/status is persisted in PostgreSQL.
     JOBS_DIR: str = "/app/job_data"
     ASSETS_DIR: str = "assets"
+    HEALTH_MIN_DISK_FREE_GB: float = 2.0
     PRESETS_DIR: str = "presets"
     APP_ENV: str = "development"
     CORS_ORIGINS: str = ""

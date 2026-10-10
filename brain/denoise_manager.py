@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.celery_app import CELERY_AVAILABLE
+from request_context import celery_request_headers
 
 
 @dataclass
@@ -101,10 +102,10 @@ def start_denoise(job_id: str, job_dir: Path, strength: float = 0.5,
 
     if CELERY_AVAILABLE:
         from app.tasks import task_denoise_audio
-        task_denoise_audio.delay(job_id, {
+        task_denoise_audio.apply_async(args=(job_id, {
             "job_dir": str(job_dir), "strength": strength,
             "level": level, "preserve_voice": preserve_voice,
-        })
+        }), headers=celery_request_headers())
     else:
         threading.Thread(
             target=_run_denoise,

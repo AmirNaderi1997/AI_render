@@ -19,6 +19,7 @@ from app.celery_app import CELERY_AVAILABLE
 from app.config import settings
 from app.database import AsyncSessionLocal, DB_AVAILABLE
 from app.models import Job as JobRecord, Plan as PlanRecord, QCResult, RenderResult
+from request_context import celery_request_headers
 from sqlalchemy import select
 from engine.build_mlt import build
 from engine.premiere import AttachedMusic, build_premiere
@@ -468,7 +469,7 @@ def start_music_mix(job: Job, volume: float, fade_in: float, fade_out: float) ->
     _write_status(job)
     if CELERY_AVAILABLE:
         from app.tasks import task_mix_music
-        task_mix_music.delay(job.id)
+        task_mix_music.apply_async(args=(job.id,), headers=celery_request_headers())
     else:
         threading.Thread(target=_run_mix, args=(job,), daemon=True).start()
 
@@ -521,7 +522,7 @@ def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> Non
     _write_status(job)
     if CELERY_AVAILABLE:
         from app.tasks import task_run_render
-        task_run_render.delay(job.id, preview, loudnorm)
+        task_run_render.apply_async(args=(job.id, preview, loudnorm), headers=celery_request_headers())
     else:
         threading.Thread(target=_run_job, args=(job, preview, loudnorm), daemon=True).start()
 
@@ -601,7 +602,7 @@ def start_generate(
             json.dumps(request, ensure_ascii=False)
         )
         from app.tasks import task_generate_plan
-        task_generate_plan.delay(job.id)
+        task_generate_plan.apply_async(args=(job.id,), headers=celery_request_headers())
     else:
         threading.Thread(
             target=_run_generate,
@@ -972,7 +973,7 @@ def start_qc(job: Job) -> None:
     _write_status(job)
     if CELERY_AVAILABLE:
         from app.tasks import task_run_qc
-        task_run_qc.delay(job.id)
+        task_run_qc.apply_async(args=(job.id,), headers=celery_request_headers())
     else:
         threading.Thread(target=_run_qc, args=(job,), daemon=True).start()
 

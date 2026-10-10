@@ -9,12 +9,15 @@ from pathlib import Path
 
 from app.celery_app import CELERY_AVAILABLE, celery
 from app.config import settings
+from request_context import request_id_var
 
 logger = logging.getLogger(__name__)
 _NON_RETRYABLE = (ValueError, KeyError, FileNotFoundError)
 
 
 def _execute(task, name: str, job_id: str, operation, on_error=None) -> None:
+    headers = getattr(task.request, "headers", None) or {}
+    token = request_id_var.set(headers.get("request_id"))
     logger.info("%s started for job %s", name, job_id)
     try:
         operation()
@@ -25,7 +28,10 @@ def _execute(task, name: str, job_id: str, operation, on_error=None) -> None:
         if isinstance(exc, _NON_RETRYABLE):
             raise
         raise task.retry(exc=exc, countdown=min(30 * (2 ** task.request.retries), 300))
-    logger.info("%s completed for job %s", name, job_id)
+    else:
+        logger.info("%s completed for job %s", name, job_id)
+    finally:
+        request_id_var.reset(token)
 
 
 def _job(job_id: str):

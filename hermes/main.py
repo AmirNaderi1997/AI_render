@@ -1,6 +1,5 @@
 """Run locally: python -m uvicorn hermes.main:app --port 8001."""
 import asyncio
-import json
 import logging
 import os
 import secrets
@@ -16,6 +15,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from logging_config import configure_structured_logging
+from request_context import request_id_from_header, request_id_var
 configure_structured_logging()
 
 from hermes.config import settings
@@ -99,12 +99,14 @@ elif settings.ALLOWED_HOSTS.strip():
     log.warning("ALLOWED_HOSTS is configured but ignored because APP_ENV/ENV/ENVIRONMENT is not production")
 app.add_middleware(CORSMiddleware, allow_origins=[] if production else ["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_credentials=not production, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                   allow_headers=["Authorization", "Content-Type"])
+                   allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+                   expose_headers=["X-Request-ID"])
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     if exc.status_code >= 500:
+        request.state.exception_type = type(exc).__name__
         log.error("server_error status=%s path=%s", exc.status_code, request.url.path)
         return JSONResponse({"detail": {"code": "INTERNAL_ERROR"}}, status_code=exc.status_code)
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
@@ -112,15 +114,35 @@ async def http_error(request: Request, exc: StarletteHTTPException):
 
 @app.middleware("http")
 async def request_log(request: Request, call_next):
+    request_id = request_id_from_header(request.headers.get("X-Request-ID"))
+    token = request_id_var.set(request_id)
     started = time.monotonic()
-    response = await call_next(request)
-    log.info(json.dumps({"event": "http_request", "service": "hermes", "method": request.method,
-                         "path": request.url.path, "status": response.status_code,
-                         "duration_ms": round((time.monotonic() - started) * 1000)}))
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
+    exception_type = None
+    try:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            exception_type = type(exc).__name__
+            response = JSONResponse({"detail": {"code": "INTERNAL_ERROR"}}, status_code=500)
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
+        exception_type = exception_type or getattr(request.state, "exception_type", None)
+        extra = {"event": "http_request", "service": "hermes", "request_id": request_id,
+                 "method": request.method, "path": request.url.path,
+                 "status_code": response.status_code, "duration_ms": duration_ms}
+        if response.status_code >= 500:
+            extra["exception_type"] = exception_type or "HTTPException"
+            log.error("http_request", extra=extra)
+        elif duration_ms > 2000:
+            log.warning("http_request", extra=extra)
+        else:
+            log.info("http_request", extra=extra)
+        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+    finally:
+        request_id_var.reset(token)
 for router in (auth.router, posts.router, scheduler.router, analytics.router, advisor.router, settings_router.router):
     app.include_router(router)
 
