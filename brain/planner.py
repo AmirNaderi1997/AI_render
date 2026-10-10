@@ -728,6 +728,61 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
     }
 
 
+def generate_plan_local(
+    job,
+    *,
+    style: str = "rafiei_reel",
+    output_kind: str = "reel",
+    caption_font: Optional[str] = None,
+    caption_font_id: Optional[str] = None,
+    transition_style: str = "auto",
+    transition_request: str = "",
+    style_ref: Optional[dict] = None,
+    duration: Optional[float] = None,
+    reason: str = "no external LLM provider available",
+) -> dict:
+    """Build a one-scene plan (full video, original audio, no narration/SFX) without any LLM.
+
+    Returns the same plan dict structure as the external provider path.
+    """
+    if duration is None:
+        from engine.probe import probe_duration
+        duration = probe_duration(job.dir / "raw" / job.raw_name)
+    duration = float(duration)
+    if duration <= 0:
+        raise ValueError("source video has no positive duration")
+
+    canvas = {"width": 1080, "height": 1080 if output_kind == "post" else 1920, "fps": 30}
+    if caption_font:
+        canvas["caption_font"] = caption_font
+    if caption_font_id:
+        canvas["caption_font_id"] = caption_font_id
+    plan_data = {
+        "version": "0.1",
+        "style": style,
+        "canvas": canvas,
+        "source": f"raw/{job.raw_name}",
+        "segments": [{"id": "s1", "in": 0.0, "out": round(duration, 6)}],
+        "transitions": [],
+        "transition_context": {
+            "output_kind": output_kind,
+            "style": transition_style,
+            "request": transition_request,
+        },
+        "captions": [],
+        "broll": [],
+        "sfx": [],
+        "export": {"file": "output.mp4", "crf": 20},
+        "generation_meta": {
+            "provider": "local",
+            "fallback_reason": reason,
+        },
+    }
+    if style_ref:
+        plan_data["style_profile"] = dict(style_ref)
+    return plan_data
+
+
 def generate_plan(
     job_dir: Path,
     transcript: dict,

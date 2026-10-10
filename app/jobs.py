@@ -638,6 +638,7 @@ def _run_generate(
     from brain.transcribe import transcribe, effective_transcript, file_hash, choose_engine
     from brain.silence import detect_pauses
     from brain.planner import generate_plan
+    from brain.llm import LLMUsage, provider_configured
 
     try:
         raw_path = job.dir / "raw" / job.raw_name
@@ -677,7 +678,7 @@ def _run_generate(
             job.generate.asr_cost_usd = asr_info.get("cost_usd", 0)
 
         # 2. Auto-correct transcript (best-effort; never breaks the pipeline)
-        if not use_saved_transcript:
+        if not use_saved_transcript and provider_configured():
             _run_auto_correct(job, transcript, style)
             transcript = _reload_transcript(job)
 
@@ -693,40 +694,11 @@ def _run_generate(
         # deployment without the optional local Whisper runtime should remain
         # able to produce a renderable plan; it simply has no subtitle track.
         if not transcript.get("words"):
-            duration = float(transcript.get("duration") or 0)
-            if duration <= 0:
-                raise ValueError("source video has no positive duration")
-            canvas = {"width": 1080, "height": 1080 if output_kind == "post" else 1920,
-                      "fps": 30}
-            if caption_font:
-                canvas["caption_font"] = caption_font
-            if caption_font_id:
-                canvas["caption_font_id"] = caption_font_id
-            plan_data = {
-                "version": "0.1",
-                "style": style,
-                "canvas": canvas,
-                "source": f"raw/{job.raw_name}",
-                "segments": [{"id": "s1", "in": 0.0, "out": duration}],
-                "transitions": [],
-                "transition_context": {
-                    "output_kind": output_kind,
-                    "style": transition_style,
-                    "request": transition_request,
-                },
-                "captions": [],
-                "broll": [],
-                "sfx": [],
-                "export": {"file": "output.mp4", "crf": 20},
-                "generation_meta": {
-                    "transcript_fallback": transcript.get("fallback_reason", "no speech detected")
-                },
-            }
-            if style_ref:
-                plan_data["style_profile"] = dict(style_ref)
-            _, errors = validate_plan(plan_data, base_dir=job.dir, check_media=True)
-            if errors:
-                raise ValueError("; ".join(errors))
+            plan_data = _local_plan(
+                job, transcript, style, output_kind, caption_font, caption_font_id,
+                transition_style, transition_request, style_ref,
+                transcript.get("fallback_reason", "no speech detected"),
+            )
             job.plan_data = plan_data
             job.generate.status = "done"
             job.generate.stage = ""
@@ -756,24 +728,44 @@ def _run_generate(
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning("learned style profile load failed: %s", exc)
-        plan_data, usage = generate_plan(
-            job_dir=job.dir,
-            transcript=transcript,
-            keep_ranges=pauses["keep"],
-            remove_ranges=pauses["remove"],
-            source_rel=source_rel,
-            preset_name=style,
-            instruction=instruction,
-            caption_font=caption_font,
-            style_profile=style_profile,
-            style_ref=style_ref,
-            learned_profile=learned_profile,
-            locked_transitions=locked_transitions,
-            output_kind=output_kind,
-            transition_style=transition_style,
-            transition_request=transition_request,
-            on_progress=lambda msg: _gen_progress(job, msg),
-        )
+        used_local = False
+        local_reason = ""
+        if not provider_configured():
+            local_reason = "no external LLM provider configured"
+        else:
+            try:
+                plan_data, usage = generate_plan(
+                    job_dir=job.dir,
+                    transcript=transcript,
+                    keep_ranges=pauses["keep"],
+                    remove_ranges=pauses["remove"],
+                    source_rel=source_rel,
+                    preset_name=style,
+                    instruction=instruction,
+                    caption_font=caption_font,
+                    style_profile=style_profile,
+                    style_ref=style_ref,
+                    learned_profile=learned_profile,
+                    locked_transitions=locked_transitions,
+                    output_kind=output_kind,
+                    transition_style=transition_style,
+                    transition_request=transition_request,
+                    on_progress=lambda msg: _gen_progress(job, msg),
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "LLM plan generation failed; using local fallback: %s", exc)
+                local_reason = f"external LLM provider failed: {exc}"[:300]
+        if local_reason:
+            job.generate.message = "building local plan (no external provider)…"
+            _write_status(job)
+            plan_data = _local_plan(
+                job, transcript, style, output_kind, caption_font, caption_font_id,
+                transition_style, transition_request, style_ref, local_reason,
+            )
+            usage = LLMUsage()
+            used_local = True
         if caption_font_id:
             from engine.font_library import resolve_font
             approved_font = resolve_font(caption_font_id)
@@ -789,7 +781,7 @@ def _run_generate(
 
         job.generate.status = "done"
         job.generate.stage = ""
-        job.generate.message = "plan generated"
+        job.generate.message = "plan generated locally (no external provider)" if used_local else "plan generated"
         job.generate.cost_usd = round(usage.cost_estimate, 6)
         job.generate.input_tokens = usage.input_tokens
         job.generate.output_tokens = usage.output_tokens
@@ -804,6 +796,22 @@ def _run_generate(
         _write_status(job)
         if raise_errors:
             raise
+
+
+def _local_plan(job, transcript, style, output_kind, caption_font, caption_font_id,
+                transition_style, transition_request, style_ref, reason) -> dict:
+    from brain.planner import generate_plan_local
+
+    plan_data = generate_plan_local(
+        job, style=style, output_kind=output_kind, caption_font=caption_font,
+        caption_font_id=caption_font_id, transition_style=transition_style,
+        transition_request=transition_request, style_ref=style_ref,
+        duration=float(transcript.get("duration") or 0) or None, reason=reason,
+    )
+    _, errors = validate_plan(plan_data, base_dir=job.dir, check_media=True)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return plan_data
 
 
 def _gen_progress(job: Job, msg: str) -> None:

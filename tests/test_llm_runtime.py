@@ -4,7 +4,19 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from brain.llm import _provider_timeout_seconds, chat_json
+from app.config import settings
+from brain.llm import _provider_timeout_seconds, chat_json, provider_configured
+
+
+def test_provider_configured_requires_selected_provider_credentials():
+    with patch.object(settings, "LLM_PROVIDER", "anthropic"), \
+         patch.object(settings, "ANTHROPIC_API_KEY", ""):
+        assert provider_configured() is False
+
+    with patch.object(settings, "LLM_PROVIDER", "jarvis"), \
+         patch.object(settings, "JARVIS_API_KEY", "test-key"), \
+         patch.object(settings, "JARVIS_BASE_URL", "https://example.invalid/v1"):
+        assert provider_configured() is True
 
 
 def test_openai_compatible_calls_use_a_bounded_timeout_without_sdk_retries():

@@ -9,6 +9,7 @@ import pytest
 from brain.transcribe import (
     effective_transcript, file_hash, save_corrections, transcribe, transcript_key,
 )
+from app import jobs as jobstore
 from app.jobs import Job, _run_generate
 from brain.llm import LLMUsage
 
@@ -164,10 +165,62 @@ def test_empty_transcript_builds_renderable_full_source_plan_without_llm(tmp_pat
          patch("brain.silence.detect_pauses", side_effect=AssertionError("should not detect pauses")), \
          patch("brain.planner.generate_plan", side_effect=AssertionError("should not call LLM")):
         _run_generate(job, "rafiei_reel", "", "small", "en", False, False, "")
-    plan = json.loads((tmp_path / "plan.json").read_text())
+    plan = job.plan_data
+    assert plan is not None
     assert job.generate.status == "done"
     assert plan["segments"] == [{"id": "s1", "in": 0.0, "out": 2.0}]
     assert plan["captions"] == []
+
+
+def test_missing_provider_builds_and_persists_local_plan(tmp_path, media_dir):
+    (tmp_path / "raw").mkdir()
+    video = tmp_path / "raw" / "clip.mp4"
+    video.write_bytes((media_dir / "raw.mp4").read_bytes())
+    transcript = _raw("candidate", file_hash(video))
+    transcript["duration"] = 12.0
+    (tmp_path / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False))
+    job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
+
+    with patch("brain.llm.provider_configured", return_value=False), \
+         patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 2.0)], "remove": []}), \
+         patch("brain.planner.generate_plan", side_effect=AssertionError("should not call LLM")), \
+         patch("app.jobs._write_status", wraps=jobstore._write_status) as persist:
+        _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "", raise_errors=True)
+
+    assert job.generate.status == "done"
+    assert job.generate.message == "plan generated locally (no external provider)"
+    assert job.generate.cost_usd == 0
+    assert job.plan_data is not None
+    assert job.plan_data["source"] == "raw/clip.mp4"
+    assert job.plan_data["segments"] == [{"id": "s1", "in": 0.0, "out": 12.0}]
+    assert job.plan_data["captions"] == []
+    assert job.plan_data["sfx"] == []
+    assert job.plan_data["generation_meta"] == {
+        "provider": "local",
+        "fallback_reason": "no external LLM provider configured",
+    }
+    assert persist.call_args.args[0].plan_data == job.plan_data
+
+
+def test_unreachable_provider_falls_back_to_local_plan(tmp_path, media_dir):
+    (tmp_path / "raw").mkdir()
+    video = tmp_path / "raw" / "clip.mp4"
+    video.write_bytes((media_dir / "raw.mp4").read_bytes())
+    transcript = _raw("candidate", file_hash(video))
+    transcript["duration"] = 12.0
+    (tmp_path / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False))
+    job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
+
+    with patch("brain.llm.provider_configured", return_value=True), \
+         patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 2.0)], "remove": []}), \
+         patch("brain.planner.generate_plan", side_effect=ConnectionError("provider offline")):
+        _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "", raise_errors=True)
+
+    assert job.generate.status == "done"
+    assert job.plan_data is not None
+    assert job.plan_data["segments"] == [{"id": "s1", "in": 0.0, "out": 12.0}]
+    assert job.plan_data["generation_meta"]["provider"] == "local"
+    assert "provider offline" in job.plan_data["generation_meta"]["fallback_reason"]
 
 
 def test_regeneration_passes_reviewed_words_to_planner(tmp_path):
@@ -179,6 +232,7 @@ def test_regeneration_passes_reviewed_words_to_planner(tmp_path):
     save_corrections(tmp_path, "candidate", [{"index": 0, "text": "محصول"}])
     job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
     with patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 1.0)], "remove": []}), \
+         patch("brain.llm.provider_configured", return_value=True), \
          patch("brain.planner.generate_plan", return_value=({"version": "0.2"}, LLMUsage())) as planner:
         _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "")
     assert job.generate.status == "done"

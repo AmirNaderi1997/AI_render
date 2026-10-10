@@ -107,6 +107,22 @@ _PRESETS: dict[str, tuple[str, str]] = {
 }
 
 
+def provider_configured() -> bool:
+    """True when the selected text-LLM provider has the credentials it needs."""
+    provider = _provider()
+    if provider == "anthropic":
+        return bool(_getenv_ci("ANTHROPIC_API_KEY"))
+    if provider == "sarovi":
+        return bool(_getenv_ci("SAROVI_API_KEY"))
+    if provider in ("openai", "openai_compatible", "jarvis"):
+        try:
+            _resolve_preset(provider)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
 # ── plan/text model ───────────────────────────────────────────────────────────
 
 def chat_json(
