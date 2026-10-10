@@ -12,7 +12,9 @@ from request_context import RequestContextFilter
 
 
 _REDACTED = "[REDACTED]"
-_EMAIL_RE = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])")
+_EMAIL_RE = re.compile(
+    r"(?i)(?<![\w.+-])[\w.+-]+(?:@|%40)[\w.-]+\.[A-Za-z]{2,}(?![\w.-])"
+)
 _JWT_RE = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])")
 _CREDENTIAL_RE = re.compile(
     r"(?i)(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|password|passwd|pwd|"

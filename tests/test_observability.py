@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -207,3 +208,17 @@ def test_sensitive_filter_redacts_new_structured_fields():
     assert "person@example.com" not in rendered
     assert "203.0.113.10" not in rendered
     assert rendered.count("[REDACTED]") >= 3
+
+
+def test_encoded_email_is_redacted_from_application_and_nginx_access_logs():
+    email = "log-probe-codex-20261010%40example.invalid"
+    record = logging.makeLogRecord({"msg": f'GET /jobs/{email} HTTP/1.1 " 401'})
+
+    assert SensitiveDataFilter().filter(record) is True
+    assert email not in record.getMessage()
+    assert "[REDACTED]" in record.getMessage()
+
+    nginx_config = (Path(__file__).resolve().parents[1] / "nginx" / "nginx.conf").read_text()
+    assert "map $uri $safe_log_path" in nginx_config
+    assert "~*(?:@|%40) \"[REDACTED]\";" in nginx_config
+    assert '"path":"$safe_log_path"' in nginx_config
