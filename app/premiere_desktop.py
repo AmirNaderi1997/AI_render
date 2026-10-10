@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import HTTPException, Request
 
 from engine.premiere import (PREMIERE_BUNDLE, PREMIERE_CAPTIONS, PREMIERE_REPORT,
-                             PREMIERE_XML, build_premiere)
+                             PREMIERE_XML, _plan_sha256, build_premiere)
 from engine.schema import validate_plan
 from . import jobs as jobstore
 
@@ -83,12 +83,17 @@ def safe_file(job, path: Path) -> Path:
 
 
 def current_identity(job, *, regenerate: bool) -> dict:
-    plan, errors = validate_plan(jobstore.load_plan(job), base_dir=job.dir, check_media=True)
+    try:
+        plan_data = jobstore.load_plan(job)
+    except FileNotFoundError as exc:
+        raise HTTPException(409, "Generate a plan first") from exc
+    source = jobstore.source_media_path(job)
+    if source is not None and not source.is_file():
+        raise HTTPException(404, "Source media missing")
+    plan, errors = validate_plan(plan_data, base_dir=job.dir, check_media=True)
     if errors:
         raise HTTPException(422, errors)
-    plan_hash = hashlib.sha256(
-        json.dumps(jobstore.load_plan(job), sort_keys=True, ensure_ascii=False).encode('utf-8')
-    ).hexdigest()
+    plan_hash = _plan_sha256(plan, job.dir)
     if regenerate:
         for name in (PREMIERE_XML, PREMIERE_CAPTIONS, PREMIERE_REPORT, PREMIERE_BUNDLE):
             if (job.dir / name).is_symlink():
@@ -165,12 +170,16 @@ def status(job) -> dict:
         result['editable_plan'] = 'ready'
         result['warnings'] = identity['report'].get('warnings', [])
     except HTTPException as exc:
+        if exc.status_code == 409 and exc.detail == "Generate a plan first":
+            raise
+        if exc.status_code == 404 and exc.detail == "Source media missing":
+            raise
         result['editable_plan'] = 'stale' if exc.status_code == 409 else 'missing'
         result['warnings'] = [str(exc.detail)]
         if (job.render.status == 'done' and job.render.output and not job.render.preview and
-                job.plan_data is not None and job.render.plan_sha256 != hashlib.sha256(
-                    json.dumps(job.plan_data, sort_keys=True, ensure_ascii=False).encode()
-                ).hexdigest()):
+                job.plan_data is not None and job.render.plan_sha256 != _plan_sha256(
+                    validate_plan(job.plan_data, base_dir=job.dir, check_media=True)[0], job.dir
+                )):
             result['final_render'] = 'outdated'
         if record:
             result['saved_project'] = 'outdated'

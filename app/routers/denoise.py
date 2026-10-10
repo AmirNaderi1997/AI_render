@@ -60,11 +60,18 @@ def _require_render_idle(job) -> None:
         raise HTTPException(409, "wait for the current render before reprocessing audio")
 
 
+def _require_source_media(job) -> None:
+    source = jobstore.source_media_path(job)
+    if source is None or not source.is_file():
+        raise HTTPException(404, "Source media missing")
+
+
 @router.post("/{job_id}/denoise", status_code=202)
 def denoise_trigger(job_id: str, body: DenoiseTriggerBody = DenoiseTriggerBody()):
     job = jobstore.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
+    _require_source_media(job)
     _require_render_idle(job)
     from brain.denoise_manager import DenoiseState, get_state, start_denoise
     try:
@@ -102,6 +109,7 @@ def denoise_start(job_id: str, body: DenoiseStartBody = DenoiseStartBody()):
     job = jobstore.get(job_id)
     if not job:
         raise HTTPException(404, "job not found")
+    _require_source_media(job)
     _require_render_idle(job)
     from brain.denoise_manager import DenoiseState, get_state, start_denoise
     try:

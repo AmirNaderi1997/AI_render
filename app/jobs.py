@@ -232,14 +232,15 @@ def _write_status(job: Job) -> None:
         _jobs[job.id] = job
 
 
-def create_job(user_id: Optional[str] = None, db=None) -> Job:
+def create_job(user_id: Optional[str] = None, db=None, *, persist: bool = True) -> Job:
     _ensure_jobs_root()
     jid = uuid.uuid4().hex[:12]
     d = JOBS_ROOT / jid
     (d / "raw").mkdir(parents=True, exist_ok=True)
     (d / "exports").mkdir(parents=True, exist_ok=True)
     job = Job(id=jid, dir=d, user_id=str(user_id) if user_id is not None else None)
-    _write_status(job)
+    if persist:
+        _write_status(job)
     return job
 
 
@@ -294,6 +295,7 @@ def update_job(job: Job, db=None) -> Job:
 def rescan(root: Optional[Path] = None) -> int:
     """Refresh the process-local cache from PostgreSQL."""
     if DB_AVAILABLE:
+        cleanup_orphaned_jobs()
         return len(list_jobs())
     # Non-production mode deliberately has no durable fallback. It is useful
     # for isolated unit tests, but a restart cannot pretend file status is
@@ -302,12 +304,21 @@ def rescan(root: Optional[Path] = None) -> int:
         return len(_jobs)
 
 
-def save_raw(job: Job, filename: str, src) -> Path:
+def save_raw(job: Job, filename: str, src, *, expected_size: int | None = None) -> Path:
     """Stream a file-like object to raw/ in 1 MB chunks (no full-file RAM copy)."""
     filename = Path(filename).name or "raw.mp4"
     dst = job.dir / "raw" / filename
-    with open(dst, "wb") as out:
-        shutil.copyfileobj(src, out, 1024 * 1024)
+    try:
+        with open(dst, "wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
+        if not dst.is_file():
+            raise OSError("upload file was not created")
+        actual_size = dst.stat().st_size
+        if expected_size is not None and actual_size != expected_size:
+            raise OSError(f"upload size mismatch: expected {expected_size} bytes, wrote {actual_size}")
+    except BaseException:
+        dst.unlink(missing_ok=True)
+        raise
     job.raw_name = filename
     _write_status(job)
     return dst
@@ -336,9 +347,60 @@ def save_plan(job: Job, data: dict) -> tuple[Optional[dict], list[str]]:
 
 
 def load_plan(job: Job) -> dict:
+    if DB_AVAILABLE:
+        async def load():
+            assert AsyncSessionLocal is not None
+            async with AsyncSessionLocal() as db:
+                plan = (await db.execute(
+                    select(PlanRecord).where(PlanRecord.job_id == job.id)
+                )).scalar_one_or_none()
+                return plan.data if plan is not None else None
+        plan_data = _await_db(load())
+        if plan_data is None:
+            raise FileNotFoundError("Generate a plan first")
+        job.plan_data = plan_data
+        return plan_data
     if job.plan_data is None:
-        raise FileNotFoundError("plan.json not found — generate or upload a plan first")
+        raise FileNotFoundError("Generate a plan first")
     return job.plan_data
+
+
+def source_media_path(job: Job) -> Path | None:
+    """Resolve the original source media path recorded for this job."""
+    if job.raw_name:
+        return job.dir / "raw" / Path(job.raw_name).name
+    plan = job.plan_data
+    if plan and plan.get("source"):
+        source = Path(plan["source"])
+        return source if source.is_absolute() else job.dir / source
+    return None
+
+
+def cleanup_orphaned_jobs() -> int:
+    """Mark persisted uploads failed when their recorded source file is gone."""
+    if not DB_AVAILABLE:
+        return 0
+
+    async def cleanup() -> int:
+        assert AsyncSessionLocal is not None
+        async with AsyncSessionLocal() as db:
+            records = (await db.execute(
+                select(JobRecord).where(JobRecord.source_path.is_not(None))
+            )).scalars().all()
+            changed = 0
+            for record in records:
+                relative = Path(record.source_path)
+                source = (JOBS_ROOT / record.id / relative).resolve()
+                root = (JOBS_ROOT / record.id).resolve()
+                if source.is_relative_to(root) and source.is_file():
+                    continue
+                record.status = "failed"
+                record.message = "Upload was interrupted. Please upload again."
+                changed += 1
+            if changed:
+                await db.commit()
+            return changed
+    return _await_db(cleanup())
 
 
 def _clear_mix(job: Job) -> None:

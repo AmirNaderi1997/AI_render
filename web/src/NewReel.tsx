@@ -38,6 +38,8 @@ export default function NewReel() {
   const [asrEngine, setAsrEngine] = React.useState("auto");
   const [transcriptionHint, setTranscriptionHint] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [uploadPct, setUploadPct] = React.useState<number | null>(null);
+  const [uploadFailed, setUploadFailed] = React.useState(false);
   const [generating, setGenerating] = React.useState(false);
   const [genStatus, setGenStatus] = React.useState<any>(null);
   const [err, setErr] = React.useState<string | null>(null);
@@ -125,10 +127,17 @@ export default function NewReel() {
 
   async function onCreate() {
     if (!video) { setVideoError("Select a raw video first."); return; }
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setUploadFailed(false); setUploadPct(0);
     try {
       const plan = planFile ?? (planText.trim() ? planText : undefined);
-      const { job, errors } = await api.createJob(video, plan);
+      let result;
+      try {
+        result = await api.createJob(video, plan, setUploadPct);
+      } catch (e) {
+        setUploadFailed(true);
+        throw e;
+      } finally { setUploadPct(null); }
+      const { job, errors } = result;
       if (errors.length) setErr("Plan warnings: " + errors.join("; "));
       setJobId(job.id);
       await uploadMusicToJob(job.id);
@@ -140,9 +149,16 @@ export default function NewReel() {
 
   async function onGenerate() {
     if (!video) { setVideoError("Select a raw video first."); return; }
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setUploadFailed(false); setUploadPct(0);
     try {
-      const { job } = await api.createJob(video);
+      let result;
+      try {
+        result = await api.createJob(video, undefined, setUploadPct);
+      } catch (e) {
+        setUploadFailed(true);
+        throw e;
+      } finally { setUploadPct(null); }
+      const { job } = result;
       setJobId(job.id);
       await uploadMusicToJob(job.id);
       await api.generatePlan(job.id, {
@@ -367,7 +383,7 @@ export default function NewReel() {
         </div>
         <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 16 }}>
           <button onClick={onGenerate} disabled={busy || generating || !video}>
-            {generating ? "Generating..." : "Generate Edit Plan"}
+            {generating ? "Generating..." : uploadFailed ? "Retry upload" : "Generate Edit Plan"}
           </button>
           <span className="muted">or upload a manual plan.json</span>
         </div>
@@ -408,9 +424,20 @@ export default function NewReel() {
 
       {err && <div className="errors" role="alert">{err}</div>}
 
+      {uploadPct !== null && (
+        <div role="status" aria-live="polite" style={{ marginTop: 12 }}>
+          Uploading video… {uploadPct}%
+          <div role="progressbar" aria-label="Video upload progress" aria-valuemin={0}
+            aria-valuemax={100} aria-valuenow={uploadPct}
+            style={{ height: 6, marginTop: 6, borderRadius: 99, background: "var(--border, #ddd)", overflow: "hidden" }}>
+            <div style={{ width: `${uploadPct}%`, height: "100%", background: "var(--accent)", transition: "width .2s" }} />
+          </div>
+        </div>
+      )}
+
       <div className="action-bar">
         <button onClick={onCreate} disabled={busy || !video || planJsonError} className="secondary">
-          {busy ? "Creating..." : "Create (with manual plan)"}
+          {busy ? "Creating..." : uploadFailed ? "Retry upload" : "Create (with manual plan)"}
         </button>
       </div>
     </div>

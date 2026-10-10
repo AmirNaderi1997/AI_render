@@ -328,12 +328,13 @@ export const api = {
     return j(await authFetch(`${BASE}/auth/me`));
   },
 
-  async createJob(video: File, plan?: File | string): Promise<{ job: Job; errors: string[] }> {
+  async createJob(video: File, plan?: File | string,
+    onProgress?: (percent: number) => void): Promise<{ job: Job; errors: string[] }> {
     const fd = new FormData();
     fd.append("video", video);
     if (plan instanceof File) fd.append("plan", plan);
     else if (typeof plan === "string") fd.append("plan_text", plan);
-    return j(await authFetch(`${BASE}/jobs`, { method: "POST", body: fd }));
+    return uploadWithProgress(`${BASE}/jobs`, fd, onProgress);
   },
   async getJob(id: string, signal?: AbortSignal): Promise<Job> {
     return j(await authFetch(`${BASE}/jobs/${id}`, { signal }));

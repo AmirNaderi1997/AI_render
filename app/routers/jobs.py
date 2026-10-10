@@ -43,13 +43,28 @@ async def create_job(
         video_size = None
     if video_size == 0:
         raise HTTPException(422, "Video upload is empty")
-    job = jobstore.create_job(user_id=request.state.user.id, db=db)
+    # Allocate a media directory, but keep the database row out of the registry
+    # until the complete source file has been streamed and verified.
+    job = jobstore.create_job(user_id=request.state.user.id, db=db, persist=False)
     try:
         # UploadFile is a spooled temp file: stream it to disk, never .read() it whole.
-        jobstore.save_raw(job, video.filename or "raw.mp4", video.file)
-    except Exception as e:
+        raw_path = jobstore.save_raw(
+            job, video.filename or "raw.mp4", video.file, expected_size=video_size
+        )
+        if not raw_path.is_file() or (video_size is not None and raw_path.stat().st_size != video_size):
+            raise OSError("upload file is incomplete")
+    except BaseException as e:
+        (job.dir / "raw" / Path(video.filename or "raw.mp4").name).unlink(missing_ok=True)
+        with jobstore._lock:
+            jobstore._jobs.pop(job.id, None)
+        # A completed upload write is the only operation that can have inserted
+        # this row; remove its directory when that write itself failed.
+        import shutil
+        shutil.rmtree(job.dir, ignore_errors=True)
         log.error("upload failed for job %s", job.id)
-        raise HTTPException(500, f"Could not save upload: {e}")
+        if not isinstance(e, Exception):
+            raise
+        raise HTTPException(500, "Could not save upload") from e
 
     if music is not None:
         fname = music.filename or "music.mp3"
@@ -109,5 +124,8 @@ def get_raw(job_id: str, request: Request, db: AsyncSession = Depends(get_db)):
                 source = (source if source.is_absolute() else job.dir / source).resolve()
                 if source.is_relative_to(job.dir.resolve()) and source.is_file():
                     return FileResponse(source)
-        raise HTTPException(404, "no source video")
-    return FileResponse(job.dir / "raw" / job.raw_name)
+        raise HTTPException(404, "Source media missing")
+    source = job.dir / "raw" / Path(job.raw_name).name
+    if not source.is_file():
+        raise HTTPException(404, "Source media missing")
+    return FileResponse(source)
