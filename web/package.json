@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "date-fns": "^4.4.0",
@@ -18,10 +19,14 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
-    "vite": "^5.4.1"
+    "vite": "^5.4.1",
+    "vitest": "^4.1.11"
   }
 }

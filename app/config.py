@@ -1,5 +1,6 @@
 """Central configuration for local and database-backed deployments."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -54,6 +55,26 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+
+    @model_validator(mode="after")
+    def validate_production_hosts(self):
+        if self.APP_ENV.strip().lower() == "production":
+            hosts = [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
+            if not hosts:
+                raise ValueError("ALLOWED_HOSTS must contain at least one hostname in production")
+            for host in hosts:
+                # TrustedHostMiddleware expects hostnames, without URL or port syntax.
+                if (
+                    host == "*"
+                    or "*" in host
+                    or ":" in host
+                    or "/" in host
+                    or "@" in host
+                    or host.startswith(".")
+                    or host.endswith(".")
+                ):
+                    raise ValueError("ALLOWED_HOSTS must contain exact hostnames without ports in production")
+        return self
 
     class Config:
         env_file = ".env"

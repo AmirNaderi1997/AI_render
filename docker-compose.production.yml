@@ -1,0 +1,64 @@
+# Production-only overrides. Compose v2.24.4+ is required for !reset.
+services:
+  nginx:
+    depends_on:
+      app:
+        condition: service_healthy
+      hermes:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      APP_ENV: production
+
+  frontend:
+    # The base frontend copies its build output and exits. Keep this container
+    # alive after copying so the production restart policy does not rerun it.
+    entrypoint:
+      - sh
+      - -c
+      - cp -r /app/dist/. /usr/share/nginx/html/ && exec tail -f /dev/null
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      APP_ENV: production
+
+  app:
+    ports: !reset []
+    environment:
+      APP_ENV: production
+    restart: unless-stopped
+    mem_limit: 4g
+
+  celery-worker:
+    command: >-
+      celery -A app.celery_app.celery worker
+      --concurrency=2
+      --loglevel=info
+      -Q default
+    environment:
+      APP_ENV: production
+    restart: unless-stopped
+    mem_limit: 6g
+
+  celery-beat:
+    environment:
+      APP_ENV: production
+    restart: unless-stopped
+    mem_limit: 512m
+
+  hermes:
+    environment:
+      APP_ENV: production
+    restart: unless-stopped
+    mem_limit: 1g
+
+  db:
+    restart: unless-stopped
+    mem_limit: 1g
+
+  redis:
+    restart: unless-stopped
+    mem_limit: 512m
