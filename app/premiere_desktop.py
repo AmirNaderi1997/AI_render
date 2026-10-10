@@ -214,8 +214,6 @@ def status(job) -> dict:
         if not link_present:
             result['project_state'] = 'not_linked'
     result['file_state'] = 'ready'
-    if not cap['available']:
-        result['warnings'].append('Premiere Pro is unavailable. Download and import the XML, SRT, and rendered MP4 manually.')
     if not record:
         expected_clean = job.dir / f'ai-render-{job.id}-clean.prproj'
         if expected_clean.is_file() and not expected_clean.is_symlink():
