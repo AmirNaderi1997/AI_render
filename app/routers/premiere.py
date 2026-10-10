@@ -52,6 +52,10 @@ def premiere_desktop_status(job_id: str, request: Request):
     except HTTPException:
         result['capability']['local_launch_supported'] = False
     result['bridge'] = premiere_bridge.status(job)
+    # Premiere missing is a normal state, not an error: XML/ZIP export still works.
+    available = bool(result['capability']['available'])
+    result['available'] = available
+    result['message'] = None if available else 'Premiere Pro not detected'
     return result
 
 

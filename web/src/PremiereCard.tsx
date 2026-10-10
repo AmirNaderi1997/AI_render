@@ -94,14 +94,14 @@ export function PremiereCard({ id, savePlan, renderDone = false }: { id: string;
   }
 
   const local = !!state?.capability.local_launch_supported;
-  const app = !!state?.capability.available;
+  const app = state?.available ?? !!state?.capability.available;
   const renderReady = state?.final_render === "final" || state?.final_render === "preview_only";
   const renderLabel = state?.final_render === "preview_only" ? "Preview only — confirmation required" : state?.final_render;
   return <section className="card" dir="auto" aria-label="Premiere Pro desktop integration">
     <h2>Premiere Pro</h2>
     {!state && !statusError && <p className="muted" role="status">Checking Premiere availability…</p>}
     {busy && <p className="muted" role="status">Working with Premiere…</p>}
-    <p>Version: <b>{app ? state?.capability.version : "Unavailable"}</b> · Editable plan (FCP7 XML): <b>{state?.editable_plan || "checking"}</b> · Final render: <b>{renderLabel || "checking"}</b> · Saved .prproj: <b>{state?.saved_project || "checking"}</b></p>
+    <p>{!state ? <>Version: <b>checking</b></> : app ? <>Version: <b>{state.capability.version}</b></> : <b>Premiere Pro not detected — XML/ZIP export still works</b>} · Editable plan (FCP7 XML): <b>{state?.editable_plan || "checking"}</b> · Final render: <b>{renderLabel || "checking"}</b> · Saved .prproj: <b>{state?.saved_project || "checking"}</b></p>
     <p>Premiere control bridge: <b>{state?.bridge?.state === "completed" ? "Receipt completed — inspect Timeline in Premiere" : state?.bridge?.state || "checking"}</b></p>
     {!local && <p className="errors">Desktop launch requires the local AI Render backend. Download and import manually. / باز کردن پریمیر فقط روی همین دستگاه ممکن است.</p>}
     {state?.project_state === "not_linked" && <div className="muted">

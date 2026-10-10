@@ -231,3 +231,36 @@ def test_remote_and_foreign_origin_cannot_launch(monkeypatch):
 def test_open_request_rejects_arbitrary_browser_path():
     with pytest.raises(ValidationError):
         PremiereOpenBody.model_validate({'mode': 'editable_plan', 'path': '/tmp/other.xml'})
+
+
+def test_status_reports_missing_premiere_as_200_with_available_false(job, monkeypatch):
+    from app.routers import premiere as router
+
+    monkeypatch.setattr(desktop, 'capability', lambda: {'available': False,
+        'local_launch_supported': True, 'version': None, 'bundle_id': None, 'app_path': None})
+    monkeypatch.setattr(desktop, 'require_local', lambda request: None)
+    monkeypatch.setattr(router.premiere_desktop, 'job_for_id', lambda job_id: job)
+    monkeypatch.setattr(router, 'verify_job_owner', lambda request, job: None)
+
+    response = router.premiere_desktop_status(job.id, request=None)
+    assert response['available'] is False
+    assert response['message'] == 'Premiere Pro not detected'
+    # The full status payload stays intact so XML/ZIP export and render state still render.
+    assert response['capability']['available'] is False
+    assert response['final_render'] == 'final'
+    assert 'bridge' in response
+
+
+def test_status_reports_detected_premiere_as_available(job, monkeypatch):
+    from app.routers import premiere as router
+
+    monkeypatch.setattr(desktop, 'capability', lambda: {'available': True, 'version': '25.3.0',
+        'bundle_id': 'com.adobe.PremierePro.25', 'app_path': '/Applications/Premiere.app',
+        'local_launch_supported': True})
+    monkeypatch.setattr(desktop, 'require_local', lambda request: None)
+    monkeypatch.setattr(router.premiere_desktop, 'job_for_id', lambda job_id: job)
+    monkeypatch.setattr(router, 'verify_job_owner', lambda request, job: None)
+
+    response = router.premiere_desktop_status(job.id, request=None)
+    assert response['available'] is True
+    assert response['message'] is None

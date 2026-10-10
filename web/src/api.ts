@@ -43,6 +43,8 @@ export interface Job {
 
 export type PremiereMode = "editable_plan" | "rendered_video" | "plan_and_render" | "saved_project" | "reveal";
 export interface PremiereStatus {
+  available?: boolean;
+  message?: string | null;
   capability: { available: boolean; local_launch_supported: boolean; version: string | null; bundle_id: string | null; app_path: string | null };
   editable_plan: "ready" | "stale" | "missing";
   final_render: "final" | "preview_only" | "missing" | "outdated";
