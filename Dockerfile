@@ -21,7 +21,7 @@ COPY app/ app/
 COPY brain/ brain/
 COPY engine/ engine/
 COPY hermes/ hermes/
-COPY logging_config.py .
+COPY logging_config.py request_context.py .
 COPY scripts/ scripts/
 COPY presets/ presets/
 COPY alembic/ alembic/

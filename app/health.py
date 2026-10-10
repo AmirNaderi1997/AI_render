@@ -52,7 +52,7 @@ def _celery_ping_cached() -> bool:
             return _celery_cache[1]
         passed = False
         if CELERY_AVAILABLE and celery is not None:
-            replies = celery.control.inspect(timeout=CHECK_TIMEOUT_SECONDS).ping()
+            replies = celery.control.inspect(timeout=CHECK_TIMEOUT_SECONDS / 2).ping()
             passed = bool(replies) and all(value.get("ok") == "pong" for value in replies.values())
         _celery_cache = (time.monotonic(), passed)
         return passed
