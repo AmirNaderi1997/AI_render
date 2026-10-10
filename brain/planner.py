@@ -115,7 +115,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
       "text": "<2-5 words>", "style": "normal|emphasis|cta"}}
   ],
   "broll": [
-    {{"at": <output_timeline_sec>, "duration": <sec>, "file": "broll/placeholder.mp4",
+    {{"at": <output_timeline_sec>, "duration": <sec>, "file": "<existing B-roll file path>",
       "in": 0.0, "query": "<text description for future asset matching>"}}
   ],
   "music": {{
@@ -134,6 +134,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 - Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each{caption_lang_rule}
 - Mark one emphasis caption per key point, one CTA caption at the end
 - B-roll: ~{preset.get("broll", {}).get("default_duration_sec", 2.0)}s each, minimum {preset.get("broll", {}).get("min_gap_sec", 8.0)}s apart
+- B-roll file paths must refer to existing media; never use a placeholder or invented path. If no real asset is available, omit that B-roll item.
 - Place a whoosh SFX on each cut into B-roll
 - Music ducks under all speech
 

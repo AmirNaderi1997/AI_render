@@ -149,8 +149,8 @@ def resolve_plan_assets(plan_data: dict, base_dir: Optional[Path] = None) -> dic
     """Resolve unresolved broll queries and missing music/sfx in a plan.
 
     Mutates plan_data in place. Returns a summary of resolutions.
-    Only resolves assets that have a query but no valid file, or a placeholder file.
-    Preserves user-specified file paths.
+    Resolves assets that have a query but no valid file, or a placeholder file.
+    Preserves existing user-specified paths and omits unresolved missing media.
     """
     from engine.schema import PROJECT_ROOT
 
@@ -164,26 +164,46 @@ def resolve_plan_assets(plan_data: dict, base_dir: Optional[Path] = None) -> dic
             return path.is_file()
         return (base / path).is_file() or (PROJECT_ROOT / path).is_file()
 
-    resolutions: dict = {"broll": [], "music": None, "sfx": []}
+    resolutions: dict = {"broll": [], "omitted_broll": [], "music": None, "sfx": []}
 
+    retained_broll = []
     for i, broll in enumerate(plan_data.get("broll", [])):
         query = broll.get("query")
         file_path = broll.get("file", "")
-        is_placeholder = not file_path or "placeholder" in file_path
+        is_placeholder = not file_path or "placeholder" in file_path.lower()
         file_exists = exists(file_path)
 
         if query and (is_placeholder or not file_exists):
             min_dur = float(broll.get("duration", 0))
-            matches = broll_match(query, min_duration=min_dur, top_n=3)
-            if matches:
-                broll["file"] = matches[0].path
-                alternatives = [m.path for m in matches[1:]]
+            try:
+                matches = broll_match(query, min_duration=min_dur, top_n=3)
+            except Exception as exc:
+                log.warning("B-roll lookup failed for item %d: %s", i, exc)
+                matches = []
+            match = next((candidate for candidate in matches if exists(candidate.path)), None)
+            if match:
+                broll["file"] = match.path
+                alternatives = [m.path for m in matches if m.path != match.path and exists(m.path)]
                 resolutions["broll"].append({
-                    "index": i,
+                    "index": len(retained_broll),
                     "query": query,
-                    "matched": matches[0].path,
+                    "matched": match.path,
                     "alternatives": alternatives,
                 })
+
+        resolved_file = broll.get("file", "")
+        if not resolved_file or "placeholder" in resolved_file.lower() or not exists(resolved_file):
+            resolutions["omitted_broll"].append({
+                "index": i,
+                "query": query,
+                "file": file_path,
+                "reason": "no existing B-roll media was available",
+            })
+            log.warning("omitted B-roll item %d because no existing media was available: %s", i, file_path)
+            continue
+        retained_broll.append(broll)
+
+    plan_data["broll"] = retained_broll
 
     if not plan_data.get("music") or not plan_data["music"].get("file"):
         pass

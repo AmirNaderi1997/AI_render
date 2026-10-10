@@ -9,6 +9,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
+from brain import asset_match
 from engine.premiere import (
     PREMIERE_BUNDLE,
     PREMIERE_CAPTIONS,
@@ -194,6 +195,28 @@ def test_package_refuses_missing_media(tmp_path, media_dir):
     plan.sfx = [Sfx(at=1, file="missing.wav")]
     with pytest.raises(FileNotFoundError, match="Premiere media is missing"):
         build_premiere(plan, tmp_path, base_dir=tmp_path)
+
+
+def test_placeholder_broll_is_omitted_before_premiere_packaging(tmp_path, media_dir, monkeypatch):
+    from brain.asset_match import resolve_plan_assets
+
+    plan = _plan(tmp_path, media_dir)
+    plan.broll = [Broll(at=1, duration=1, file="broll/placeholder.mp4", query="city skyline")]
+    plan_data = plan.model_dump(by_alias=True)
+    monkeypatch.setattr(asset_match, "broll_match", lambda *args, **kwargs: [])
+
+    resolutions = resolve_plan_assets(plan_data, base_dir=tmp_path)
+    assert plan_data["broll"] == []
+    assert resolutions["omitted_broll"] == [{
+        "index": 0,
+        "query": "city skyline",
+        "file": "broll/placeholder.mp4",
+        "reason": "no existing B-roll media was available",
+    }]
+
+    resolved_plan, errors = validate_plan(plan_data, base_dir=tmp_path, check_media=False)
+    assert errors == []
+    assert build_premiere(resolved_plan, tmp_path, base_dir=tmp_path).is_file()
 
 
 def test_silent_source_does_not_claim_an_audio_stream(tmp_path, media_dir):
