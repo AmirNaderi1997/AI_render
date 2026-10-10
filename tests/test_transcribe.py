@@ -181,9 +181,9 @@ def test_missing_provider_builds_and_persists_local_plan(tmp_path, media_dir):
     (tmp_path / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False))
     job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
 
-    with patch("brain.llm.provider_configured", return_value=False), \
+    from brain.ai_provider import LocalFallbackProvider
+    with patch("brain.planner.get_provider", return_value=LocalFallbackProvider()), \
          patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 2.0)], "remove": []}), \
-         patch("brain.planner.generate_plan", side_effect=AssertionError("should not call LLM")), \
          patch("app.jobs._write_status", wraps=jobstore._write_status) as persist:
         _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "", raise_errors=True)
 
@@ -211,8 +211,7 @@ def test_unreachable_provider_falls_back_to_local_plan(tmp_path, media_dir):
     (tmp_path / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False))
     job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
 
-    with patch("brain.llm.provider_configured", return_value=True), \
-         patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 2.0)], "remove": []}), \
+    with patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 2.0)], "remove": []}), \
          patch("brain.planner.generate_plan", side_effect=ConnectionError("provider offline")):
         _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "", raise_errors=True)
 
@@ -232,7 +231,6 @@ def test_regeneration_passes_reviewed_words_to_planner(tmp_path):
     save_corrections(tmp_path, "candidate", [{"index": 0, "text": "محصول"}])
     job = Job(id="test", dir=tmp_path, raw_name="clip.mp4")
     with patch("brain.silence.detect_pauses", return_value={"keep": [(0.0, 1.0)], "remove": []}), \
-         patch("brain.llm.provider_configured", return_value=True), \
          patch("brain.planner.generate_plan", return_value=({"version": "0.2"}, LLMUsage())) as planner:
         _run_generate(job, "rafiei_reel", "", None, "fa", True, False, "")
     assert job.generate.status == "done"

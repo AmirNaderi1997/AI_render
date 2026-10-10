@@ -156,7 +156,9 @@ def test_planner_generates_valid_plan(tmp_path):
 
     mock_usage = LLMUsage(input_tokens=1000, output_tokens=500, model="mock", elapsed_sec=1.0)
 
-    with patch("brain.planner.chat_json", return_value=(VALID_PLAN.copy(), mock_usage)), \
+    provider = MagicMock()
+    provider.generate_plan.return_value = (VALID_PLAN.copy(), mock_usage)
+    with patch("brain.planner.get_provider", return_value=provider), \
          patch("brain.planner.analyse_segments", return_value=([{"segment_id": "s1", "role": "explanation", "energy": 2}, {"segment_id": "s2", "role": "claim", "energy": 2}], LLMUsage())), \
          patch("brain.planner.critic_effect_pass", side_effect=lambda effects, *args: (effects, LLMUsage())):
         plan, usage = generate_plan(
@@ -271,14 +273,16 @@ def test_planner_retries_on_invalid(tmp_path):
 
     call_count = 0
 
-    def mock_chat(system, user, **kwargs):
+    def mock_plan(*_args, **_kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             return bad_plan, mock_usage
         return VALID_PLAN.copy(), mock_usage
 
-    with patch("brain.planner.chat_json", side_effect=mock_chat), \
+    provider = MagicMock()
+    provider.generate_plan.side_effect = mock_plan
+    with patch("brain.planner.get_provider", return_value=provider), \
          patch("brain.planner.analyse_segments", return_value=([{"segment_id": "s1", "role": "explanation", "energy": 2}, {"segment_id": "s2", "role": "claim", "energy": 2}], LLMUsage())), \
          patch("brain.planner.critic_effect_pass", side_effect=lambda effects, *args: (effects, LLMUsage())):
         plan, usage = generate_plan(
@@ -300,7 +304,9 @@ def test_planner_fails_after_max_retries(tmp_path):
     bad_plan = {**VALID_PLAN, "segments": []}
     mock_usage = LLMUsage(input_tokens=100, output_tokens=50, model="mock", elapsed_sec=0.1)
 
-    with patch("brain.planner.chat_json", return_value=(bad_plan, mock_usage)):
+    provider = MagicMock()
+    provider.generate_plan.return_value = (bad_plan, mock_usage)
+    with patch("brain.planner.get_provider", return_value=provider):
         with pytest.raises(ValueError, match="Failed to generate"):
             generate_plan(
                 job_dir=tmp_path,

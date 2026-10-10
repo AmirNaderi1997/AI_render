@@ -14,6 +14,7 @@ import pytest
 
 from engine.content_types import ContentType, get_preset
 from brain.storyboard import Storyboard, Scene, generate_storyboard, _build_storyboard_system_prompt
+from brain.ai_provider import JarvisProvider, LocalFallbackProvider
 from brain.media_provider import (
     LocalFixtureProvider, JarvisImageProvider, register_provider, get_provider, list_providers,
     MediaResult, _registry,
@@ -24,10 +25,10 @@ from engine.schema import EditPlan, validate_plan
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _configured_storyboard_provider(monkeypatch):
-    """Mocked chat_json tests represent a configured external text provider."""
-    monkeypatch.setattr("brain.storyboard.provider_configured", lambda: True)
+def _storyboard_provider(response):
+    provider = MagicMock()
+    provider.generate_storyboard.return_value = response
+    return provider
 
 
 def _mock_storyboard_response(content_type: str = "reel"):
@@ -167,40 +168,37 @@ class TestContentTypeEnum:
 # ── 3. Storyboard generation — reel ─────────────────────────────────────────
 
 class TestStoryboardGenerationReel:
-    @patch("brain.storyboard.chat_json")
-    def test_reel_has_multiple_scenes(self, mock_chat):
+    def test_reel_has_multiple_scenes(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("reel"), LLMUsage())
-        sb = generate_storyboard("Make a cooking tutorial reel", "reel", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("reel"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Make a cooking tutorial reel", "reel", "en", "rafiei_reel")
         assert isinstance(sb, Storyboard)
         assert len(sb.scenes) >= 2
 
-    @patch("brain.storyboard.chat_json")
-    def test_reel_total_duration_within_limit(self, mock_chat):
+    def test_reel_total_duration_within_limit(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("reel"), LLMUsage())
-        sb = generate_storyboard("Tutorial reel", "reel", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("reel"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Tutorial reel", "reel", "en", "rafiei_reel")
         total = sum(s.duration_s for s in sb.scenes)
         assert total <= 90
 
-    @patch("brain.storyboard.chat_json")
-    def test_creative_brief_reaches_storyboard_prompt(self, mock_chat):
+    def test_creative_brief_reaches_storyboard_prompt(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("reel"), LLMUsage())
+        provider = _storyboard_provider((_mock_storyboard_response("reel"), LLMUsage()))
         brief = {"audience": "Persian students", "brand": "Warm terracotta"}
-        sb = generate_storyboard("A useful habit reel", "reel", "fa", "rafiei_reel", brief)
-        user_prompt = mock_chat.call_args.args[1]
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("A useful habit reel", "reel", "fa", "rafiei_reel", brief)
+        user_prompt = provider.generate_storyboard.call_args.args[1]["user_prompt"]
         assert "Target audience: Persian students" in user_prompt
         assert "Brand and visual identity: Warm terracotta" in user_prompt
         assert sb.creative_brief == brief
         assert Storyboard.from_dict(sb.to_dict()).creative_brief == brief
 
-    @patch("brain.storyboard.provider_configured", return_value=False)
-    @patch("brain.storyboard.chat_json")
-    def test_missing_provider_returns_three_scene_editable_template(self, mock_chat, _mock_configured):
-        sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
-
-        mock_chat.assert_not_called()
+    def test_missing_provider_returns_three_scene_editable_template(self):
+        with patch("brain.storyboard.get_provider", return_value=LocalFallbackProvider("text_provider_not_configured")):
+            sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
         assert sb.is_fallback is True
         assert sb.fallback_reason == "text_provider_not_configured"
         assert [scene.description for scene in sb.scenes] == ["Intro", "Main point", "Outro"]
@@ -208,26 +206,28 @@ class TestStoryboardGenerationReel:
         assert sb.estimated_total_cost == 0.0
         assert Storyboard.from_dict(sb.to_dict()).is_fallback is True
 
-    @patch("brain.storyboard.provider_configured", return_value=True)
-    @patch("brain.storyboard.chat_json", side_effect=TimeoutError("provider took too long"))
-    def test_provider_timeout_returns_template(self, _mock_chat, _mock_configured):
-        sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
+    def test_provider_timeout_returns_template(self):
+        provider = JarvisProvider()
+        with patch.object(provider, "_chat_json", side_effect=TimeoutError("provider took too long")), \
+             patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
 
         assert sb.is_fallback is True
-        assert sb.fallback_reason == "text_provider_timeout"
+        assert "provider took too long" in sb.fallback_reason
         assert len(sb.scenes) == 3
 
-    @patch("brain.storyboard.provider_configured", return_value=True)
-    @patch("brain.storyboard.chat_json", side_effect=RuntimeError("provider rejected request"))
-    def test_non_timeout_provider_error_remains_visible(self, _mock_chat, _mock_configured):
-        with pytest.raises(RuntimeError, match="provider rejected request"):
+    def test_non_timeout_provider_error_remains_visible(self):
+        provider = JarvisProvider()
+        with patch.object(provider, "_chat_json", side_effect=RuntimeError("provider rejected request")), \
+             patch("brain.storyboard.get_provider", return_value=provider), \
+             pytest.raises(RuntimeError, match="provider rejected request"):
             generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
 
-    @patch("brain.storyboard.provider_configured", return_value=False)
-    def test_content_submission_persists_editable_fallback(self, _mock_configured, tmp_path):
+    def test_content_submission_persists_editable_fallback(self, tmp_path):
         job = SimpleNamespace(id="template-job", dir=tmp_path)
         with patch("app.jobs.create_job", return_value=job), \
              patch("app.jobs._write_status"), \
+             patch("brain.storyboard.get_provider", return_value=LocalFallbackProvider()), \
              patch("brain.content_creator.get_provider", return_value=LocalFixtureProvider()):
             result = create_content(
                 "Explain a useful habit", "reel", "en", provider_name="local_fixture",
@@ -248,29 +248,29 @@ class TestStoryboardGenerationReel:
 # ── 4. Storyboard generation — post ─────────────────────────────────────────
 
 class TestStoryboardGenerationPost:
-    @patch("brain.storyboard.chat_json")
-    def test_post_single_scene(self, mock_chat):
+    def test_post_single_scene(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("post"), LLMUsage())
-        sb = generate_storyboard("Product photo", "post", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("post"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Product photo", "post", "en", "rafiei_reel")
         assert len(sb.scenes) == 1
 
 
 # ── 5. Storyboard generation — story ────────────────────────────────────────
 
 class TestStoryboardGenerationStory:
-    @patch("brain.storyboard.chat_json")
-    def test_story_scene_count(self, mock_chat):
+    def test_story_scene_count(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("story"), LLMUsage())
-        sb = generate_storyboard("Quick tip", "story", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("story"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Quick tip", "story", "en", "rafiei_reel")
         assert 1 <= len(sb.scenes) <= 3
 
-    @patch("brain.storyboard.chat_json")
-    def test_story_total_duration_within_limit(self, mock_chat):
+    def test_story_total_duration_within_limit(self):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("story"), LLMUsage())
-        sb = generate_storyboard("Quick tip", "story", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("story"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Quick tip", "story", "en", "rafiei_reel")
         total = sum(s.duration_s for s in sb.scenes)
         assert total <= 15
 
@@ -571,12 +571,11 @@ class TestStoryboardToPlanStory:
 # ── 11. Full flow (unit, no job system) ───────────────────────────────────────
 
 class TestFullFlow:
-    @patch("brain.storyboard.chat_json")
-    def test_storyboard_to_plan_round_trip(self, mock_chat, tmp_path):
+    def test_storyboard_to_plan_round_trip(self, tmp_path):
         from brain.llm import LLMUsage
-        mock_chat.return_value = (_mock_storyboard_response("reel"), LLMUsage())
-
-        sb = generate_storyboard("Make a motivational reel", "reel", "en", "rafiei_reel")
+        provider = _storyboard_provider((_mock_storyboard_response("reel"), LLMUsage()))
+        with patch("brain.storyboard.get_provider", return_value=provider):
+            sb = generate_storyboard("Make a motivational reel", "reel", "en", "rafiei_reel")
         assert len(sb.scenes) > 0
 
         media = _make_media(sb, tmp_path)

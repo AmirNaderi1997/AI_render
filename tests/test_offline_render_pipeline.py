@@ -125,9 +125,13 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
         },
         "export": {"file": "exports/v1.mp4", "crf": 17},
     }
-    monkeypatch.setattr(planner, "chat_json", lambda *_args, **_kwargs: (
-        copy.deepcopy(model_plan), LLMUsage(input_tokens=1, output_tokens=1, model="offline-fixture")
-    ))
+    provider = type("OfflineProvider", (), {
+        "generate_plan": lambda self, *_args, **_kwargs: (
+            copy.deepcopy(model_plan),
+            LLMUsage(input_tokens=1, output_tokens=1, model="offline-fixture"),
+        )
+    })()
+    monkeypatch.setattr(planner, "get_provider", lambda: provider)
     monkeypatch.setattr(planner, "measure_segment_signals", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(planner, "analyse_segments", lambda segments, *_args, **_kwargs: (
         [

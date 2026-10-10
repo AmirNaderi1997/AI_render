@@ -29,7 +29,7 @@ from . import auth, jobs as jobstore
 from .auth_routes import router as auth_router
 from .database import DB_AVAILABLE, close_db, init_db
 from .config import settings
-from .routers import content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
+from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
 
 log = logging.getLogger("uvicorn.error")
 
@@ -136,6 +136,7 @@ async def request_log(request: Request, call_next):
     return response
 
 app.include_router(auth_router)
+app.include_router(ai.router)
 app.include_router(jobs.router)
 app.include_router(plans.router)
 app.include_router(render.router)

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     JWT_REFRESH_DAYS: int = 30
     AI_PROVIDER: str = "jarvis"
     AI_PROVIDER_TIMEOUT_SECONDS: int = 300
+    AI_TIMEOUT_SECONDS: int = 60
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45
     LLM_PROVIDER: str = "anthropic"
     LLM_MODEL: str = "claude-sonnet-5-5"
@@ -27,7 +28,10 @@ class Settings(BaseSettings):
     TTS_VOICE: str = "en-US-GuyNeural"
     TTS_RATE: str = "+0%"
     JARVIS_API_KEY: str = ""
+    JARVIS_API_URL: str = ""
+    JARVIS_MODEL: str = ""
     JARVIS_BASE_URL: str = ""
+    SAROVI_API_URL: str = ""
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
     OPENAI_BASE_URL: str = ""

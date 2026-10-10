@@ -27,7 +27,8 @@ import yaml
 from engine.schema import PROJECT_ROOT, EditPlan, format_error, validate_plan
 from engine.effects import MOTIONS, LIGHTS, EFFECT_CATALOG, EFFECT_FAMILIES, families_for_llm
 from engine.effects_v4 import MyEffectsPreset, EffectFeedback
-from .llm import LLMUsage, chat_json
+from .llm import LLMUsage
+from .ai_provider import get_provider
 from .segment_analysis import analyse_segments
 from .effect_score import critic_effect_pass
 from .effect_score_v4 import select_effects_with_vision
@@ -752,34 +753,18 @@ def generate_plan_local(
     if duration <= 0:
         raise ValueError("source video has no positive duration")
 
-    canvas = {"width": 1080, "height": 1080 if output_kind == "post" else 1920, "fps": 30}
-    if caption_font:
-        canvas["caption_font"] = caption_font
-    if caption_font_id:
-        canvas["caption_font_id"] = caption_font_id
-    plan_data = {
-        "version": "0.1",
-        "style": style,
-        "canvas": canvas,
-        "source": f"raw/{job.raw_name}",
-        "segments": [{"id": "s1", "in": 0.0, "out": round(duration, 6)}],
-        "transitions": [],
-        "transition_context": {
-            "output_kind": output_kind,
-            "style": transition_style,
-            "request": transition_request,
-        },
-        "captions": [],
-        "broll": [],
-        "sfx": [],
-        "export": {"file": "output.mp4", "crf": 20},
-        "generation_meta": {
-            "provider": "local",
-            "fallback_reason": reason,
-        },
-    }
-    if style_ref:
-        plan_data["style_profile"] = dict(style_ref)
+    from .ai_provider import LocalFallbackProvider
+    plan_data, _usage = LocalFallbackProvider(reason).generate_plan({
+        "duration": duration,
+        "source_rel": f"raw/{job.raw_name}",
+        "preset_name": style,
+        "output_kind": output_kind,
+        "caption_font": caption_font,
+        "caption_font_id": caption_font_id,
+        "transition_style": transition_style,
+        "transition_request": transition_request,
+        "style_ref": style_ref,
+    }, {"duration": duration})
     return plan_data
 
 
@@ -858,6 +843,20 @@ def generate_plan(
 
     total_usage = LLMUsage()
     last_errors: list[str] = []
+    provider = get_provider()
+    provider_context = {
+        "job_dir": str(job_dir),
+        "duration": transcript.get("duration", 0),
+        "source_rel": source_rel,
+        "preset_name": preset_name,
+        "output_kind": output_kind,
+        "caption_font": caption_font,
+        "transition_style": transition_style,
+        "transition_request": transition_request,
+        "style_ref": style_ref,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
 
     for attempt in range(1, max_retries + 1):
         if on_progress:
@@ -873,9 +872,10 @@ def generate_plan(
             user_prompt_with_errors = user_prompt
 
         try:
-            plan_data, usage = chat_json(system_prompt, user_prompt_with_errors, timeout_seconds=300)
+            provider_context["user_prompt"] = user_prompt_with_errors
+            plan_data, usage = provider.generate_plan(provider_context, transcript)
         except Exception as e:
-            log.error("LLM call failed (attempt %d): %s", attempt, e)
+            log.error("AI provider call failed (attempt %d): %s", attempt, e)
             last_errors = [str(e)]
             continue
 
@@ -883,6 +883,15 @@ def generate_plan(
         total_usage.output_tokens += usage.output_tokens
         total_usage.model = usage.model
         total_usage.elapsed_sec += usage.elapsed_sec
+
+        # Provider-level connection/timeout handling returns the same validated
+        # local plan used by the no-key path. Do not decorate it with hosted
+        # analysis calls; it must remain a predictable zero-network fallback.
+        if (plan_data.get("generation_meta") or {}).get("provider") == "local":
+            plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
+            if errors:
+                raise ValueError("; ".join(errors))
+            return plan_data, total_usage
 
         # Clamp segment.out to source duration so renders never exceed it
         _clamp_segments(plan_data, job_dir, source_rel)

@@ -638,7 +638,8 @@ def _run_generate(
     from brain.transcribe import transcribe, effective_transcript, file_hash, choose_engine
     from brain.silence import detect_pauses
     from brain.planner import generate_plan
-    from brain.llm import LLMUsage, provider_configured
+    from brain.llm import LLMUsage
+    from brain.ai_provider import LocalFallbackProvider, get_provider
 
     try:
         raw_path = job.dir / "raw" / job.raw_name
@@ -678,7 +679,7 @@ def _run_generate(
             job.generate.asr_cost_usd = asr_info.get("cost_usd", 0)
 
         # 2. Auto-correct transcript (best-effort; never breaks the pipeline)
-        if not use_saved_transcript and provider_configured():
+        if not use_saved_transcript and not isinstance(get_provider(), LocalFallbackProvider):
             _run_auto_correct(job, transcript, style)
             transcript = _reload_transcript(job)
 
@@ -730,33 +731,31 @@ def _run_generate(
                 logging.getLogger(__name__).warning("learned style profile load failed: %s", exc)
         used_local = False
         local_reason = ""
-        if not provider_configured():
-            local_reason = "no external LLM provider configured"
-        else:
-            try:
-                plan_data, usage = generate_plan(
-                    job_dir=job.dir,
-                    transcript=transcript,
-                    keep_ranges=pauses["keep"],
-                    remove_ranges=pauses["remove"],
-                    source_rel=source_rel,
-                    preset_name=style,
-                    instruction=instruction,
-                    caption_font=caption_font,
-                    style_profile=style_profile,
-                    style_ref=style_ref,
-                    learned_profile=learned_profile,
-                    locked_transitions=locked_transitions,
-                    output_kind=output_kind,
-                    transition_style=transition_style,
-                    transition_request=transition_request,
-                    on_progress=lambda msg: _gen_progress(job, msg),
-                )
-            except Exception as exc:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "LLM plan generation failed; using local fallback: %s", exc)
-                local_reason = f"external LLM provider failed: {exc}"[:300]
+        try:
+            plan_data, usage = generate_plan(
+                job_dir=job.dir,
+                transcript=transcript,
+                keep_ranges=pauses["keep"],
+                remove_ranges=pauses["remove"],
+                source_rel=source_rel,
+                preset_name=style,
+                instruction=instruction,
+                caption_font=caption_font,
+                style_profile=style_profile,
+                style_ref=style_ref,
+                learned_profile=learned_profile,
+                locked_transitions=locked_transitions,
+                output_kind=output_kind,
+                transition_style=transition_style,
+                transition_request=transition_request,
+                on_progress=lambda msg: _gen_progress(job, msg),
+            )
+            used_local = (plan_data.get("generation_meta") or {}).get("provider") == "local"
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "AI plan generation failed; using local fallback: %s", exc)
+            local_reason = f"external AI provider failed: {exc}"[:300]
         if local_reason:
             job.generate.message = "building local plan (no external provider)…"
             _write_status(job)

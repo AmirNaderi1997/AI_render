@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional
 
 from engine.content_types import ContentType, get_preset
-from .llm import chat_json, provider_configured
+from .ai_provider import get_provider
 
 log = logging.getLogger(__name__)
 
@@ -106,27 +106,6 @@ def _template_storyboard(
         is_fallback=True,
         fallback_reason=reason,
     )
-
-
-def _is_timeout_error(exc: BaseException) -> bool:
-    """Recognize timeout wrappers used by urllib, OpenAI, and Anthropic clients."""
-    pending: list[BaseException] = [exc]
-    seen: set[int] = set()
-    while pending:
-        current = pending.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-        if isinstance(current, TimeoutError) or "timeout" in type(current).__name__.lower():
-            return True
-        for nested in (
-            getattr(current, "reason", None),
-            getattr(current, "__cause__", None),
-            getattr(current, "__context__", None),
-        ):
-            if isinstance(nested, BaseException):
-                pending.append(nested)
-    return False
 
 
 def _build_storyboard_system_prompt(preset: dict, content_type: ContentType, language: str) -> str:
@@ -235,22 +214,23 @@ def generate_storyboard(
     system = _build_storyboard_system_prompt(preset, content_type, language)
     user = _build_storyboard_user_prompt(prompt, content_type, style, creative_brief)
 
-    if not provider_configured():
-        log.info("Text provider is not configured; using editable storyboard template")
+    provider = get_provider()
+    provider_context = {
+        "name": style,
+        "content_type": content_type.value,
+        "language": language,
+        "creative_brief": creative_brief or {},
+        "system_prompt": system,
+        "user_prompt": user,
+    }
+    data, usage = provider.generate_storyboard(prompt, provider_context)
+    provider_meta = data.pop("_provider_meta", {})
+    if provider_meta.get("provider") == "local":
+        reason = str(provider_meta.get("fallback_reason") or "text_provider_not_configured")
+        log.info("Using editable storyboard template: %s", reason)
         return _template_storyboard(
             prompt, content_type, language, style, creative_brief,
-            "text_provider_not_configured",
-        )
-
-    try:
-        data, usage = chat_json(system, user)
-    except Exception as exc:
-        if not _is_timeout_error(exc):
-            raise
-        log.warning("Text provider timed out; using editable storyboard template: %s", exc)
-        return _template_storyboard(
-            prompt, content_type, language, style, creative_brief,
-            "text_provider_timeout",
+            reason,
         )
 
     raw_scenes = data.get("scenes")
