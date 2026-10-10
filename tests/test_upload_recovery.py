@@ -59,6 +59,21 @@ def test_successful_upload_round_trips_through_raw(client):
     assert raw_response.content == payload
 
 
+def test_jobs_list_omits_thumbnail_pointer_when_poster_is_missing(client):
+    job = jobstore.create_job()
+    job.render.status = "done"
+    job.render.output = "v1.mp4"
+    output_dir = job.dir / "exports"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "v1.mp4").write_bytes(b"render")
+
+    response = client.get("/jobs")
+
+    assert response.status_code == 200
+    listed = next(item for item in response.json() if item["id"] == job.id)
+    assert listed["render"]["output"] is None
+
+
 def test_premiere_status_requires_a_plan(client):
     created = client.post("/jobs", files={"video": ("clip.mp4", b"source", "video/mp4")})
     assert created.status_code == 201

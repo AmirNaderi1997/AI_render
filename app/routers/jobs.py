@@ -21,8 +21,19 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 @router.get("")
 def list_jobs(request: Request, db: AsyncSession = Depends(get_db)):
     user_id = str(request.state.user.id)
-    return [j.to_dict() for j in jobstore.list_jobs(db=db)
-            if j.user_id is None or str(j.user_id) == user_id]
+    result = []
+    for job in jobstore.list_jobs(db=db):
+        if job.user_id is not None and str(job.user_id) != user_id:
+            continue
+        item = job.to_dict()
+        # Legacy rows can outlive local media artifacts. Keep the list response
+        # shape intact, but don't advertise a poster for a missing render.
+        output = item.get("render", {}).get("output")
+        poster = Path(output).with_name(f"{Path(output).stem}_poster.jpg") if output else None
+        if output and not (job.dir / "exports" / poster.name).is_file():
+            item["render"]["output"] = None
+        result.append(item)
+    return result
 
 
 @router.post("", status_code=201)

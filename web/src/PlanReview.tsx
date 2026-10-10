@@ -69,6 +69,9 @@ export default function PlanReview() {
       if (j.plan) {
         setPlanText(JSON.stringify(j.plan, null, 2));
         setSavedPlanText(JSON.stringify(j.plan));
+        api.premiereReport(id, controller.signal).then(report => {
+          if (isCurrent()) setPremiereManifest(report);
+        }).catch(e => note(e, "load Premiere compatibility"));
       }
     }).catch(e => { if (isCurrent()) setLoadError(friendlyError(e, "load this job")); });
     api.getTranscript(id, controller.signal).then(t => { if (isCurrent()) { setTranscript(t); setWordEdits({}); } }).catch(e => note(e, "load the transcript"));
@@ -76,7 +79,6 @@ export default function PlanReview() {
     api.listFonts(controller.signal).then(items => { if (isCurrent()) setFonts(items); }).catch(e => note(e, "load fonts"));
     api.generateStatus(id, controller.signal).then(s => { if (isCurrent()) setGenStatus(s); }).catch(e => note(e, "load plan progress"));
     api.getCorrections(id, controller.signal).then(items => { if (isCurrent()) setCorrections(items); }).catch(e => note(e, "load speech suggestions"));
-    api.premiereReport(id, controller.signal).then(report => { if (isCurrent()) setPremiereManifest(report); }).catch(e => note(e, "load Premiere compatibility"));
     return () => { active = false; controller.abort(); };
   }, [id]);
 
@@ -419,7 +421,7 @@ export default function PlanReview() {
         </div>}
       {boundaryMessage && <p className="muted">{boundaryMessage}</p>}
 
-      {id && <PremiereCard key={`${id}:${savedPlanText}:${genStatus?.status}`} id={id}
+      {id && parsedPlan && <PremiereCard key={`${id}:${savedPlanText}:${genStatus?.status}`} id={id}
         savePlan={async () => !!parsedPlan && (JSON.stringify(parsedPlan) !== savedPlanText ? save() : true)} />}
       {premiereManifest && <section className="card" dir="auto" aria-label="Premiere compatibility">
         <h2>Premiere Compatibility</h2>

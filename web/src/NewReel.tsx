@@ -46,6 +46,7 @@ export default function NewReel() {
   const [videoError, setVideoError] = React.useState("");
   const [over, setOver] = React.useState(false);
   const [jobId, setJobId] = React.useState<string | null>(null);
+  const uploadController = React.useRef<AbortController | null>(null);
   const planJsonError = React.useMemo(() => {
     if (!planText.trim() || planFile) return false;
     try { JSON.parse(planText); return false; } catch { return true; }
@@ -128,15 +129,20 @@ export default function NewReel() {
   async function onCreate() {
     if (!video) { setVideoError("Select a raw video first."); return; }
     setBusy(true); setErr(null); setUploadFailed(false); setUploadPct(0);
+    const controller = new AbortController();
+    uploadController.current = controller;
     try {
       const plan = planFile ?? (planText.trim() ? planText : undefined);
       let result;
       try {
-        result = await api.createJob(video, plan, setUploadPct);
+        result = await api.createJob(video, plan, setUploadPct, controller.signal);
       } catch (e) {
         setUploadFailed(true);
         throw e;
-      } finally { setUploadPct(null); }
+      } finally {
+        if (uploadController.current === controller) uploadController.current = null;
+        setUploadPct(null);
+      }
       const { job, errors } = result;
       if (errors.length) setErr("Plan warnings: " + errors.join("; "));
       setJobId(job.id);
@@ -150,14 +156,19 @@ export default function NewReel() {
   async function onGenerate() {
     if (!video) { setVideoError("Select a raw video first."); return; }
     setBusy(true); setErr(null); setUploadFailed(false); setUploadPct(0);
+    const controller = new AbortController();
+    uploadController.current = controller;
     try {
       let result;
       try {
-        result = await api.createJob(video, undefined, setUploadPct);
+        result = await api.createJob(video, undefined, setUploadPct, controller.signal);
       } catch (e) {
         setUploadFailed(true);
         throw e;
-      } finally { setUploadPct(null); }
+      } finally {
+        if (uploadController.current === controller) uploadController.current = null;
+        setUploadPct(null);
+      }
       const { job } = result;
       setJobId(job.id);
       await uploadMusicToJob(job.id);
@@ -427,6 +438,9 @@ export default function NewReel() {
       {uploadPct !== null && (
         <div role="status" aria-live="polite" style={{ marginTop: 12 }}>
           Uploading video… {uploadPct}%
+          <button type="button" className="secondary" onClick={() => uploadController.current?.abort()}>
+            Cancel upload
+          </button>
           <div role="progressbar" aria-label="Video upload progress" aria-valuemin={0}
             aria-valuemax={100} aria-valuenow={uploadPct}
             style={{ height: 6, marginTop: 6, borderRadius: 99, background: "var(--border, #ddd)", overflow: "hidden" }}>

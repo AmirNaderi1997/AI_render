@@ -190,11 +190,18 @@ async function j<T>(r: Response): Promise<T> {
 }
 
 async function uploadWithProgress<T>(url: string, body: FormData,
-  onProgress?: (percent: number) => void): Promise<T> {
+  onProgress?: (percent: number) => void, signal?: AbortSignal): Promise<T> {
   await ensureFreshToken();
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    if (signal?.aborted) {
+      reject(new Error("Upload was cancelled"));
+      return;
+    }
+    const abort = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
     xhr.open("POST", url);
+    signal?.addEventListener("abort", abort, { once: true });
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.upload.onprogress = event => {
@@ -202,9 +209,10 @@ async function uploadWithProgress<T>(url: string, body: FormData,
         onProgress(Math.min(100, Math.round(event.loaded / event.total * 100)));
       }
     };
-    xhr.onerror = () => reject(new Error("Upload failed: network error"));
-    xhr.onabort = () => reject(new Error("Upload was cancelled"));
+    xhr.onerror = () => { cleanup(); reject(new Error("Upload failed: network error")); };
+    xhr.onabort = () => { cleanup(); reject(new Error("Upload was cancelled")); };
     xhr.onload = () => {
+      cleanup();
       if (xhr.status === 401) {
         try { handleUnauthorized(); } catch (error) { reject(error); }
         return;
@@ -329,12 +337,12 @@ export const api = {
   },
 
   async createJob(video: File, plan?: File | string,
-    onProgress?: (percent: number) => void): Promise<{ job: Job; errors: string[] }> {
+    onProgress?: (percent: number) => void, signal?: AbortSignal): Promise<{ job: Job; errors: string[] }> {
     const fd = new FormData();
     fd.append("video", video);
     if (plan instanceof File) fd.append("plan", plan);
     else if (typeof plan === "string") fd.append("plan_text", plan);
-    return uploadWithProgress(`${BASE}/jobs`, fd, onProgress);
+    return uploadWithProgress(`${BASE}/jobs`, fd, onProgress, signal);
   },
   async getJob(id: string, signal?: AbortSignal): Promise<Job> {
     return j(await authFetch(`${BASE}/jobs/${id}`, { signal }));

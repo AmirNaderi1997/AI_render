@@ -2,7 +2,7 @@ import React from "react";
 import { useParams } from "react-router-dom";
 import { api, type MusicStatus } from "./api";
 import { PremiereCard } from "./PremiereCard";
-import { AuthenticatedMedia, useAuthenticatedMediaUrl } from "./AuthenticatedMedia";
+import { AuthenticatedMedia } from "./AuthenticatedMedia";
 import QCReview from "./QCReview";
 import { Breadcrumbs, JobWorkflow, LoadingState, NextStep, friendlyError } from "./ui";
 import { completeDenoise, trackDenoise } from "./taskNotifications";
@@ -370,8 +370,6 @@ export default function Render() {
   const [planError, setPlanError] = React.useState("");
   const currentJobId = React.useRef(id);
   currentJobId.current = id;
-  const posterUrl = useAuthenticatedMediaUrl(id && s?.output
-    ? api.exportUrl(id, s.output.replace(/\.mp4$/, "_poster.jpg")) : undefined);
 
   React.useEffect(() => {
     if (!id) return;
@@ -467,7 +465,7 @@ export default function Render() {
             <h2>Latest Export</h2>
             <span className="muted">{s.output}</span>
           </div>
-          <AuthenticatedMedia as="video" src={api.exportUrl(id, s.output)} poster={posterUrl} controls />
+          <AuthenticatedMedia as="video" src={api.exportUrl(id, s.output)} controls />
           <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
             <button disabled={downloadBusy} onClick={() => void download(api.exportUrl(id, s.output), s.output)}>{downloadBusy ? "Downloading…" : "Download"}</button>
             {plan?.content_type === "post" && (

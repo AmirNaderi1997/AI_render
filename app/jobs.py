@@ -418,7 +418,7 @@ def attach_music(job: Job, rel_path: str, name: str, duration_s: float) -> None:
                  f"exports/{job.music.output}" if job.music.output else None]
         job.music.file, job.music.name, job.music.duration_s = rel_path, name, duration_s
         _clear_mix(job)
-        _write_status(job)
+    _write_status(job)
     for rel in filter(None, stale):
         (job.dir / rel).unlink(missing_ok=True)
 
@@ -429,7 +429,7 @@ def detach_music(job: Job) -> None:
         _guard_music_edit(job)
         paths = [p for p in (job.music.file, f"exports/{job.music.output}" if job.music.output else None) if p]
         job.music = MusicState()
-        _write_status(job)
+    _write_status(job)
     for rel in paths:
         (job.dir / rel).unlink(missing_ok=True)
 
@@ -465,7 +465,7 @@ def start_music_mix(job: Job, volume: float, fade_in: float, fade_out: float) ->
         job.music.status, job.music.progress, job.music.message = "queued", 0, ""
         job.music.output = job.music.mixed_from = None
         job.music.started_at, job.music.finished_at = time.time(), None
-        _write_status(job)
+    _write_status(job)
     if CELERY_AVAILABLE:
         from app.tasks import task_mix_music
         task_mix_music.delay(job.id)
@@ -518,7 +518,7 @@ def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> Non
         _clear_mix(job)  # a mix of the previous render no longer matches
         job.render = RenderState(status="queued", preview=preview, loudnorm=loudnorm,
                                  started_at=time.time())
-        _write_status(job)
+    _write_status(job)
     if CELERY_AVAILABLE:
         from app.tasks import task_run_render
         task_run_render.delay(job.id, preview, loudnorm)
@@ -576,7 +576,7 @@ def start_generate(
             style_profile = resolve_preset(style_ref["style_id"], style_ref["version"])
         job.generate = GenerateState(status="running", stage="transcribing",
                                       started_at=time.time())
-        _write_status(job)
+    _write_status(job)
     if CELERY_AVAILABLE:
         # Preserve the exact approved style and transition inputs at dispatch.
         request = {

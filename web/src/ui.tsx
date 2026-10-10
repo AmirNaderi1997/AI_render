@@ -66,6 +66,7 @@ export function friendlyError(error: unknown, action = "complete this action"): 
   if (/invalid credentials|incorrect password/i.test(message)) return "The email or password is incorrect. Check both and try again.";
   if (/already exists|already registered/i.test(message)) return "This account already exists. Sign in or use another email.";
   if (/^invalid json$/i.test(message)) return "The edit plan is not valid JSON. Check its formatting and try again.";
+  if (/upload was cancelled|upload was canceled/i.test(message)) return "Upload cancelled. Your video is still selected; select Retry upload when you're ready.";
   return `We could not ${action}. Please try again. If it keeps happening, contact support.`;
 }
 
