@@ -36,6 +36,7 @@ export default function ContentCreator() {
 
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [scenes, setScenes] = React.useState<Scene[]>([]);
+  const [usingTemplate, setUsingTemplate] = React.useState(false);
   const [generating, setGenerating] = React.useState(false);
   const [genStatus, setGenStatus] = React.useState<{
     state: string; scenes_done: number; scenes_total: number; cost_so_far: number | null;
@@ -105,11 +106,12 @@ export default function ContentCreator() {
   async function onGenerateStoryboard() {
     if (!prompt.trim()) { setErr("Enter a prompt first"); return; }
     if (!provider) { setErr("Wait for media providers to load"); return; }
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setUsingTemplate(false);
     try {
       const res = await api.createContent(prompt, contentType, language, style, provider, creativeBrief);
       setJobId(res.job_id);
       setScenes(res.storyboard.scenes || []);
+      setUsingTemplate(res.storyboard.is_fallback === true);
     } catch (e: any) {
       setErr(friendlyError(e, "create a storyboard"));
     } finally { setBusy(false); }
@@ -288,6 +290,19 @@ export default function ContentCreator() {
       {/* Storyboard Scene Cards */}
       {scenes.length > 0 && (
         <div className="card">
+          {usingTemplate && (
+            <div role="status" style={{
+              marginBottom: 16,
+              padding: "10px 12px",
+              borderRadius: "var(--radius-md)",
+              border: "1px solid var(--warning)",
+              background: "var(--warning-soft)",
+              color: "var(--warning)",
+              fontWeight: 600,
+            }}>
+              Using template — edit to customize
+            </div>
+          )}
           <div className="section-header">
             <h2>Storyboard</h2>
             <span className="muted">

@@ -18,11 +18,17 @@ from brain.media_provider import (
     LocalFixtureProvider, JarvisImageProvider, register_provider, get_provider, list_providers,
     MediaResult, _registry,
 )
-from brain.content_creator import storyboard_to_plan, _concat_audio, _run_generation, _fit_video_to_narration, _fit_post_narration, _fit_limited_narration
+from brain.content_creator import create_content, update_storyboard, storyboard_to_plan, _concat_audio, _run_generation, _fit_video_to_narration, _fit_post_narration, _fit_limited_narration
 from engine.schema import EditPlan, validate_plan
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _configured_storyboard_provider(monkeypatch):
+    """Mocked chat_json tests represent a configured external text provider."""
+    monkeypatch.setattr("brain.storyboard.provider_configured", lambda: True)
+
 
 def _mock_storyboard_response(content_type: str = "reel"):
     if content_type == "post":
@@ -188,6 +194,55 @@ class TestStoryboardGenerationReel:
         assert "Brand and visual identity: Warm terracotta" in user_prompt
         assert sb.creative_brief == brief
         assert Storyboard.from_dict(sb.to_dict()).creative_brief == brief
+
+    @patch("brain.storyboard.provider_configured", return_value=False)
+    @patch("brain.storyboard.chat_json")
+    def test_missing_provider_returns_three_scene_editable_template(self, mock_chat, _mock_configured):
+        sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
+
+        mock_chat.assert_not_called()
+        assert sb.is_fallback is True
+        assert sb.fallback_reason == "text_provider_not_configured"
+        assert [scene.description for scene in sb.scenes] == ["Intro", "Main point", "Outro"]
+        assert sb.total_duration_s == 15.0
+        assert sb.estimated_total_cost == 0.0
+        assert Storyboard.from_dict(sb.to_dict()).is_fallback is True
+
+    @patch("brain.storyboard.provider_configured", return_value=True)
+    @patch("brain.storyboard.chat_json", side_effect=TimeoutError("provider took too long"))
+    def test_provider_timeout_returns_template(self, _mock_chat, _mock_configured):
+        sb = generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
+
+        assert sb.is_fallback is True
+        assert sb.fallback_reason == "text_provider_timeout"
+        assert len(sb.scenes) == 3
+
+    @patch("brain.storyboard.provider_configured", return_value=True)
+    @patch("brain.storyboard.chat_json", side_effect=RuntimeError("provider rejected request"))
+    def test_non_timeout_provider_error_remains_visible(self, _mock_chat, _mock_configured):
+        with pytest.raises(RuntimeError, match="provider rejected request"):
+            generate_storyboard("Explain a useful habit", "reel", "en", "rafiei_reel")
+
+    @patch("brain.storyboard.provider_configured", return_value=False)
+    def test_content_submission_persists_editable_fallback(self, _mock_configured, tmp_path):
+        job = SimpleNamespace(id="template-job", dir=tmp_path)
+        with patch("app.jobs.create_job", return_value=job), \
+             patch("app.jobs._write_status"), \
+             patch("brain.content_creator.get_provider", return_value=LocalFixtureProvider()):
+            result = create_content(
+                "Explain a useful habit", "reel", "en", provider_name="local_fixture",
+            )
+
+        assert result["job_id"] == "template-job"
+        assert result["storyboard"]["is_fallback"] is True
+        assert len(result["storyboard"]["scenes"]) == 3
+
+        edited_scenes = result["storyboard"]["scenes"]
+        edited_scenes[1]["text_overlay"] = "My edited main point"
+        edited = update_storyboard(job, edited_scenes)
+        assert edited is not None
+        assert edited["scenes"][1]["text_overlay"] == "My edited main point"
+        assert json.loads((tmp_path / "storyboard.json").read_text())["scenes"][1]["text_overlay"] == "My edited main point"
 
 
 # ── 4. Storyboard generation — post ─────────────────────────────────────────

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Literal, Optional
 
 from engine.content_types import ContentType, get_preset
-from .llm import chat_json, LLMUsage
+from .llm import chat_json, provider_configured
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +40,8 @@ class Storyboard:
     total_duration_s: float = 0.0
     estimated_total_cost: float = 0.0
     usage: Optional[dict] = None
+    is_fallback: bool = False
+    fallback_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -59,7 +61,72 @@ class Storyboard:
             total_duration_s=data.get("total_duration_s", 0.0),
             estimated_total_cost=data.get("estimated_total_cost", 0.0),
             usage=data.get("usage"),
+            is_fallback=bool(data.get("is_fallback", False)),
+            fallback_reason=data.get("fallback_reason"),
         )
+
+
+def _template_storyboard(
+    prompt: str,
+    content_type: ContentType,
+    language: str,
+    style: str,
+    creative_brief: Optional[dict[str, str]],
+    reason: str,
+) -> Storyboard:
+    """Return a valid, zero-cost storyboard that can be edited in the UI."""
+    if content_type == ContentType.POST:
+        placeholders = [("Main point", 5.0)]
+    else:
+        placeholders = [("Intro", 5.0), ("Main point", 5.0), ("Outro", 5.0)]
+
+    scenes = [
+        Scene(
+            index=index,
+            description=label,
+            duration_s=duration,
+            text_overlay=label,
+            narration_text="",
+            media_method="generate",
+            media_prompt=f"Editable placeholder visual for the {label.lower()}",
+            estimated_cost=0.0,
+        )
+        for index, (label, duration) in enumerate(placeholders)
+    ]
+    return Storyboard(
+        prompt=prompt,
+        content_type=content_type.value,
+        language=language,
+        style=style,
+        creative_brief=creative_brief or {},
+        scenes=scenes,
+        total_duration_s=sum(scene.duration_s for scene in scenes),
+        estimated_total_cost=0.0,
+        usage={"input_tokens": 0, "output_tokens": 0, "model": "local_template"},
+        is_fallback=True,
+        fallback_reason=reason,
+    )
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    """Recognize timeout wrappers used by urllib, OpenAI, and Anthropic clients."""
+    pending: list[BaseException] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, TimeoutError) or "timeout" in type(current).__name__.lower():
+            return True
+        for nested in (
+            getattr(current, "reason", None),
+            getattr(current, "__cause__", None),
+            getattr(current, "__context__", None),
+        ):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
 
 
 def _build_storyboard_system_prompt(preset: dict, content_type: ContentType, language: str) -> str:
@@ -168,7 +235,23 @@ def generate_storyboard(
     system = _build_storyboard_system_prompt(preset, content_type, language)
     user = _build_storyboard_user_prompt(prompt, content_type, style, creative_brief)
 
-    data, usage = chat_json(system, user)
+    if not provider_configured():
+        log.info("Text provider is not configured; using editable storyboard template")
+        return _template_storyboard(
+            prompt, content_type, language, style, creative_brief,
+            "text_provider_not_configured",
+        )
+
+    try:
+        data, usage = chat_json(system, user)
+    except Exception as exc:
+        if not _is_timeout_error(exc):
+            raise
+        log.warning("Text provider timed out; using editable storyboard template: %s", exc)
+        return _template_storyboard(
+            prompt, content_type, language, style, creative_brief,
+            "text_provider_timeout",
+        )
 
     raw_scenes = data.get("scenes")
     if not isinstance(raw_scenes, list) or not raw_scenes:

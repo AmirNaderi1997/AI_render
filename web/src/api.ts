@@ -721,8 +721,8 @@ export const api = {
 
   // ── Content Creator ──
   async createContent(prompt: string, content_type: string, language: string, style: string, provider: string,
-                      creative_brief: { audience?: string; goal?: string; brand?: string; avoid?: string } = {}): Promise<{ job_id: string; storyboard: any }> {
-    const result = await j<{ job_id: string; storyboard: any }>(await authFetch(`${BASE}/content/create`, {
+                      creative_brief: { audience?: string; goal?: string; brand?: string; avoid?: string } = {}): Promise<{ job_id: string; storyboard: { scenes?: any[]; is_fallback?: boolean; [key: string]: any } }> {
+    const result = await j<{ job_id: string; storyboard: { scenes?: any[]; is_fallback?: boolean; [key: string]: any } }>(await authFetch(`${BASE}/content/create`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt, content_type, language, style, provider, creative_brief }),
     }));

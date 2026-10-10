@@ -9,13 +9,13 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
 from dotenv import load_dotenv
 load_dotenv()
 
-# Ensure ELEVENLABS_API_KEY is available
+# Ensure ELEVENLABS_API_KEY is available; skip (don't abort collection) under pytest
 if not os.getenv("ELEVENLABS_API_KEY"):
-    print("ERROR: ELEVENLABS_API_KEY not set")
-    sys.exit(1)
+    pytest.skip("ELEVENLABS_API_KEY not set", allow_module_level=True)
 
 from brain.transcribe import transcribe, effective_transcript, file_hash
 from brain.correct import auto_correct, load_glossary, expand_corrections_for_save
