@@ -57,7 +57,7 @@ export default function ResetPassword() {
             <input id="reset-password" type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" required autoFocus />
             <label htmlFor="reset-confirm">Confirm password</label>
             <input id="reset-confirm" type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Repeat password" required />
-            <button type="submit" disabled={loading}>{loading ? "Resetting..." : "Reset password"}</button>
+            <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Resetting..." : "Reset password"}</button>
           </>
         )}
         <div className="auth-links"><Link to="/login">Back to login</Link></div>

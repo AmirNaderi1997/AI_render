@@ -80,7 +80,7 @@ export function FontLibrary({ selectedId, onSelect, onLibraryChange, selectable 
           <input value={name} onChange={e => setName(e.target.value)} placeholder="Reference name" aria-label="Typography reference name" />
           <input value={fontName} onChange={e => setFontName(e.target.value)} placeholder="Font name (if known)" aria-label="Font name" style={{ marginTop: 6 }} />
           <textarea rows={3} value={copiedText} onChange={e => setCopiedText(e.target.value)} placeholder="Paste sample text" aria-label="Copied typography sample" style={{ marginTop: 6 }} />
-          <button disabled={busy || !name.trim() || !copiedText.trim()} onClick={() => void run(
+          <button disabled={busy || !name.trim() || !copiedText.trim()} title={(busy || !name.trim() || !copiedText.trim()) ? "Complete the font name and source text first." : undefined} onClick={() => void run(
             () => api.addFontTextReference({ name, copied_text: copiedText, font_name: fontName }), "Typography reference saved as a candidate.")}>Save reference</button>
         </div>
       </div>
@@ -119,7 +119,7 @@ function Candidate({ candidate: c, busy, onApprove, onRemove }: { candidate: Fon
     <style>{fontFace}</style>
     <div style={{ minWidth: 180, flex: "1 1 260px" }}>
       <div className="font-row-title"><b>{c.name || c.id}</b>
-        <button type="button" className="danger-sm" disabled={busy} onClick={onRemove} aria-label={`Remove ${c.name || "candidate"}`}>✕</button></div>
+        <button type="button" className="danger-sm" disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={onRemove} aria-label={`Remove ${c.name || "candidate"}`}>✕</button></div>
       <div className="muted">{c.kind.replace(/_/g, " ")} · candidate, not approved</div>
       {c.kind === "font_file" && <>
         <div className="muted">{family} · {c.metadata?.style} · weight {c.metadata?.weight}</div>
@@ -129,7 +129,7 @@ function Candidate({ candidate: c, busy, onApprove, onRemove }: { candidate: Fon
           <div>فارسی؛ English 123۴۵۶ — نمونه‌ی قلم · regular</div>
           <div style={{ fontWeight: 700 }}>فارسی؛ English 123۴۵۶ — نمونه‌ی قلم · bold</div>
         </div>
-        <button disabled={busy} onClick={onApprove}>Approve font</button>
+        <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={onApprove}>Approve font</button>
       </>}
       {c.kind === "text_reference" && <>
         <div className="muted">Font name: {c.font_name || "not supplied"}</div>

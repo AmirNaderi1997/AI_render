@@ -393,7 +393,7 @@ export default function NewReel() {
           <span className="muted">Step 4</span>
         </div>
         <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 16 }}>
-          <button onClick={onGenerate} disabled={busy || generating || !video}>
+          <button onClick={onGenerate} disabled={busy || generating || !video} title={(busy || generating || !video) ? "Choose a video and complete the required plan fields first." : undefined}>
             {generating ? "Generating..." : uploadFailed ? "Retry upload" : "Generate Edit Plan"}
           </button>
           <span className="muted">or upload a manual plan.json</span>
@@ -450,7 +450,7 @@ export default function NewReel() {
       )}
 
       <div className="action-bar">
-        <button onClick={onCreate} disabled={busy || !video || planJsonError} className="secondary">
+        <button onClick={onCreate} disabled={busy || !video || planJsonError} title={(busy || !video || planJsonError) ? "Choose a video and complete the required plan fields first." : undefined} className="secondary">
           {busy ? "Creating..." : uploadFailed ? "Retry upload" : "Create (with manual plan)"}
         </button>
       </div>

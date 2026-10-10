@@ -78,7 +78,7 @@ export function MusicPicker({ jobId, file, onSelect }: {
           placeholder="Calm instrumental piano, slow tempo, hopeful mood, no vocals"
           onChange={e => setPrompt(e.target.value)} />
       </label>
-      <button type="button" disabled={busy || !prompt.trim()} onClick={() => void generate()}>
+      <button type="button" disabled={busy || !prompt.trim()} title={(busy || !prompt.trim()) ? "Enter a prompt first." : undefined} onClick={() => void generate()}>
         Generate 30-second clip
       </button>
     </div>

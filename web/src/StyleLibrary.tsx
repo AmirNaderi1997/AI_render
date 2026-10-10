@@ -124,7 +124,7 @@ export default function StyleLibrary() {
           onChange={e => setFiles(Array.from(e.target.files || []))} />
         {files.length > 0 && <p className="muted" style={{ marginTop: 6 }}>{files.map(f => f.name).join(", ")}</p>}
       </div>
-      <button disabled={busy || !files.length} onClick={importStyle}>
+      <button disabled={busy || !files.length} title={(busy || !files.length) ? "Add a file first." : undefined} onClick={importStyle}>
         {busy ? "Analyzing..." : "Create editable draft"}
       </button>
     </section>
@@ -151,8 +151,8 @@ export default function StyleLibrary() {
         <textarea rows={18} value={profileText} onChange={e => setProfileText(e.target.value)} style={{ width: "100%" }} />
       </label>
       <div className="row" style={{ marginTop: 12 }}>
-        <button disabled={busy} className="secondary" onClick={() => saveDraft(false)}>Save draft</button>
-        <button disabled={busy} onClick={() => saveDraft(true)}>Approve version</button>
+        <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} className="secondary" onClick={() => saveDraft(false)}>Save draft</button>
+        <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => saveDraft(true)}>Approve version</button>
       </div>
     </section>}
 
@@ -170,8 +170,8 @@ export default function StyleLibrary() {
           </div>
         </div>
         <div className="row">
-          <button className="secondary" disabled={busy} style={{ fontSize: 12 }} onClick={() => void forkProfile(p)}>Create next version</button>
-          <button className="danger-sm" disabled={busy} onClick={() => void removeProfile(p)}>Remove</button>
+          <button className="secondary" disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} style={{ fontSize: 12 }} onClick={() => void forkProfile(p)}>Create next version</button>
+          <button className="danger-sm" disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void removeProfile(p)}>Remove</button>
         </div>
         <details style={{ marginTop: 8 }}><summary style={{ cursor: "pointer", color: "var(--text-secondary)", fontSize: 12 }}>Profile and provenance</summary>
           <pre style={{ whiteSpace: "pre-wrap", fontSize: 11, padding: 10, background: "var(--bg-deep)", borderRadius: "var(--radius-sm)", marginTop: 6 }}>{JSON.stringify({ source: p.source, evidence: p.evidence, profile: p.profile }, null, 2)}</pre>
@@ -184,7 +184,7 @@ export default function StyleLibrary() {
       {!loading && data.drafts.filter(d => d.state === "draft").length === 0 && <EmptyState title="No pending drafts" description="Import images, a video, or a style file above to create one." />}
       {data.drafts.filter(d => d.state === "draft").map(d => <div className="row" key={d.id} style={{ marginBottom: 8 }}>
         <button className="secondary" onClick={() => openDraft(d)}>{d.name} &middot; {d.source.type}</button>
-        <button className="danger-sm" disabled={busy} onClick={() => void removeDraft(d)}>Remove</button>
+        <button className="danger-sm" disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void removeDraft(d)}>Remove</button>
       </div>)}
     </section>
 

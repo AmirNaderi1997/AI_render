@@ -49,7 +49,7 @@ export default function ForgotPassword() {
             {error && <div className="auth-error" role="alert">{error}</div>}
             <label htmlFor="forgot-email">Email</label>
             <input id="forgot-email" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required autoFocus />
-            <button type="submit" disabled={loading}>{loading ? "Sending..." : "Send reset link"}</button>
+            <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Sending..." : "Send reset link"}</button>
           </form>
         )}
         <div className="auth-links">

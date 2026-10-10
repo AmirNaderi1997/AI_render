@@ -24,6 +24,7 @@ export default function PlanReview() {
   const [validating, setValidating] = React.useState(false);
   const [loadError, setLoadError] = React.useState("");
   const [detailErrors, setDetailErrors] = React.useState<string[]>([]);
+  const [detailsLoading, setDetailsLoading] = React.useState(true);
   const [actionBusy, setActionBusy] = React.useState(false);
   const [actionError, setActionError] = React.useState("");
   const [saved, setSaved] = React.useState(false);
@@ -58,9 +59,10 @@ export default function PlanReview() {
     const isCurrent = () => active && !controller.signal.aborted && currentJobId.current === id;
     setLoadError("");
     setDetailErrors([]);
+    setDetailsLoading(true);
     const note = (error: unknown, action: string) => {
       if (!isCurrent()) return;
-      if (/\b404\b|not found/i.test(error instanceof Error ? error.message : String(error))) return;
+      if (action === "load the transcript" && /\b404\b|not found/i.test(error instanceof Error ? error.message : String(error))) return;
       appendDetailError(setDetailErrors, error, action);
     };
     api.getJob(id, controller.signal).then(j => {
@@ -74,11 +76,14 @@ export default function PlanReview() {
         }).catch(e => note(e, "load Premiere compatibility"));
       }
     }).catch(e => { if (isCurrent()) setLoadError(friendlyError(e, "load this job")); });
-    api.getTranscript(id, controller.signal).then(t => { if (isCurrent()) { setTranscript(t); setWordEdits({}); } }).catch(e => note(e, "load the transcript"));
-    api.listEffects(controller.signal).then(items => { if (isCurrent()) setEffects(items); }).catch(e => note(e, "load effects"));
-    api.listFonts(controller.signal).then(items => { if (isCurrent()) setFonts(items); }).catch(e => note(e, "load fonts"));
-    api.generateStatus(id, controller.signal).then(s => { if (isCurrent()) setGenStatus(s); }).catch(e => note(e, "load plan progress"));
-    api.getCorrections(id, controller.signal).then(items => { if (isCurrent()) setCorrections(items); }).catch(e => note(e, "load speech suggestions"));
+    const detailRequests = [
+      api.getTranscript(id, controller.signal).then(t => { if (isCurrent()) { setTranscript(t); setWordEdits({}); } }).catch(e => note(e, "load the transcript")),
+      api.listEffects(controller.signal).then(items => { if (isCurrent()) setEffects(items); }).catch(e => note(e, "load effects")),
+      api.listFonts(controller.signal).then(items => { if (isCurrent()) setFonts(items); }).catch(e => note(e, "load fonts")),
+      api.generateStatus(id, controller.signal).then(s => { if (isCurrent()) setGenStatus(s); }).catch(e => note(e, "load plan progress")),
+      api.getCorrections(id, controller.signal).then(items => { if (isCurrent()) setCorrections(items); }).catch(e => note(e, "load speech suggestions")),
+    ];
+    void Promise.allSettled(detailRequests).then(() => { if (isCurrent()) setDetailsLoading(false); });
     return () => { active = false; controller.abort(); };
   }, [id]);
 
@@ -104,7 +109,6 @@ export default function PlanReview() {
             }
           }).catch(e => {
             if (isCurrent()) {
-              console.warn("Failed to load job after plan generation", e);
               appendDetailError(setDetailErrors, e, "load the updated job");
             }
           });
@@ -155,9 +159,9 @@ export default function PlanReview() {
         try {
           const events = computePlanDiff(previousPlan, parsedPlan);
           if (events.length > 0) {
-            api.postPlanFeedback(id, events).catch(() => {});
+            api.postPlanFeedback(id, events).catch(e => appendDetailError(setDetailErrors, e, "save plan feedback"));
           }
-        } catch { /* best-effort */ }
+        } catch (e) { appendDetailError(setDetailErrors, e, "prepare plan feedback"); }
       }
 
       setSavedPlanText(JSON.stringify(parsedPlan));
@@ -349,6 +353,7 @@ export default function PlanReview() {
       <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: job.raw_name || `Job ${job.id}` }, { label: "Plan Review" }]} />
       <h1>{job.raw_name || `Job ${job.id}`}</h1>
       <JobWorkflow job={job} current={2} />
+      {!parsedPlan && !isGenerating && <div className="empty-state" role="status"><strong>No edit plan yet</strong><p>Generate a plan from this job to review its timeline and render a reel.</p><a className="button-link" href="/new">Create a reel</a></div>}
       {parsedPlan && !isGenerating && <NextStep>Review the edit plan, then start a preview render to check the result.</NextStep>}
 
       {parsedPlan?.style_profile && (
@@ -376,7 +381,9 @@ export default function PlanReview() {
         </div>
       )}
       {actionError && <div className="errors" role="alert">{actionError}</div>}
+      {detailsLoading && <LoadingState label="Loading plan details…" rows={1} />}
       {detailErrors.length > 0 && <div className="errors" role="alert">{detailErrors.map((message, i) => <p key={i}>{message}</p>)}</div>}
+      {detailErrors.length > 0 && <button className="secondary" onClick={() => window.location.reload()}>Retry loading plan details</button>}
       {validating && <p className="muted" role="status">Checking edit plan…</p>}
       {genStatus?.status === "error" && (
         <div className="errors" role="alert">Generation failed: {genStatus.message} <a href="/new">Start a new reel</a></div>
@@ -450,10 +457,10 @@ export default function PlanReview() {
         <p className="muted" style={{ fontSize: 12 }}>Generated package files: {(premiereManifest.generated_files || []).map((file: any) => file.filename).join(", ")}.</p>
         <p className="muted" style={{ fontSize: 12 }}>Import: open <b>project_premiere.xml</b> in Premiere, import <b>{premiereManifest.captions?.filename}</b> as captions, then save as .prproj. The rendered MP4 is visually authoritative for every fallback or rendered-only feature.</p>
         <div className="row" style={{ flexWrap: "wrap", marginTop: 12 }}>
-          <button disabled={actionBusy} onClick={() => { if (id) void preparePremiereDownload(api.premiereUrl(id)); }}>Download Premiere package (ZIP)</button>
-          <button className="secondary" disabled={actionBusy} onClick={() => { if (id) void preparePremiereDownload(api.premiereXmlUrl(id)); }}>Download XML</button>
-          <button className="secondary" disabled={actionBusy} onClick={() => { if (id) void preparePremiereDownload(api.premiereCaptionsUrl(id)); }}>Download editable captions (SRT)</button>
-          {id && <button className="secondary" disabled={actionBusy} onClick={() => void viewPremiereReport()}>View compatibility report</button>}
+          <button disabled={actionBusy} title={(actionBusy) ? "Wait for the current action to finish." : undefined} onClick={() => { if (id) void preparePremiereDownload(api.premiereUrl(id)); }}>Download Premiere package (ZIP)</button>
+          <button className="secondary" disabled={actionBusy} title={(actionBusy) ? "Wait for the current action to finish." : undefined} onClick={() => { if (id) void preparePremiereDownload(api.premiereXmlUrl(id)); }}>Download XML</button>
+          <button className="secondary" disabled={actionBusy} title={(actionBusy) ? "Wait for the current action to finish." : undefined} onClick={() => { if (id) void preparePremiereDownload(api.premiereCaptionsUrl(id)); }}>Download editable captions (SRT)</button>
+          {id && <button className="secondary" disabled={actionBusy} title={(actionBusy) ? "Wait for the current action to finish." : undefined} onClick={() => void viewPremiereReport()}>View compatibility report</button>}
         </div>
       </section>}
 
@@ -548,9 +555,9 @@ export default function PlanReview() {
             })}
           />
           <div className="row" style={{ marginTop: 14 }}>
-            <button onClick={saveTranscriptCorrections} disabled={transcriptBusy || !Object.keys(wordEdits).length}>Save transcript corrections</button>
+            <button onClick={saveTranscriptCorrections} disabled={transcriptBusy || !Object.keys(wordEdits).length} title={(transcriptBusy || !Object.keys(wordEdits).length) ? "Make a transcript correction before saving." : undefined}>Save transcript corrections</button>
             <button className="secondary" onClick={regenerateFromTranscript}
-              disabled={transcriptBusy || isGenerating || !!Object.keys(wordEdits).length}>Regenerate plan from transcript</button>
+              disabled={transcriptBusy || isGenerating || !!Object.keys(wordEdits).length} title={(transcriptBusy || isGenerating || !!Object.keys(wordEdits).length) ? "Make a transcript correction before saving." : undefined}>Regenerate plan from transcript</button>
           </div>
           <div className="row" style={{ marginTop: 12 }}>
             <label>ASR model <select value={reviewModel} onChange={e => setReviewModel(e.target.value)}>
@@ -560,7 +567,7 @@ export default function PlanReview() {
             <input aria-label="Speech terms for re-transcription" value={reviewHint}
               onChange={e => setReviewHint(e.target.value)} placeholder="Speech terms (optional)" />
             <button className="secondary" onClick={retranscribeOnly}
-              disabled={transcriptBusy || isGenerating || !!Object.keys(wordEdits).length}>Re-transcribe only</button>
+              disabled={transcriptBusy || isGenerating || !!Object.keys(wordEdits).length} title={(transcriptBusy || isGenerating || !!Object.keys(wordEdits).length) ? "Make a transcript correction before saving." : undefined}>Re-transcribe only</button>
           </div>
           {transcriptBusy && <p className="muted" role="status">Updating transcript…</p>}
           {transcriptMessage && <p className="muted" role="status" style={{ marginTop: 8 }}>{transcriptMessage}</p>}
@@ -615,12 +622,12 @@ export default function PlanReview() {
           <label className="muted"><input type="checkbox" checked={reviewAcknowledged}
             onChange={e => setReviewAcknowledged(e.target.checked)} />
             I reviewed the marked captions against the audio and checked subject framing</label>}
-        <button onClick={() => { void save(); }} className="secondary" disabled={actionBusy || saving}>{saving ? "Saving…" : "Save plan"}</button>
-        <button onClick={() => doRender(true)} disabled={actionBusy}>Preview (540x960)</button>
+        <button onClick={() => { void save(); }} className="secondary" disabled={actionBusy || saving || !parsedPlan} title={saving || actionBusy ? "Wait for the current plan action" : !parsedPlan ? "Generate an edit plan first" : undefined}>{saving ? "Saving…" : "Save plan"}</button>
+        <button onClick={() => doRender(true)} disabled={actionBusy || !parsedPlan} title={actionBusy ? "Wait for the current plan action" : !parsedPlan ? "Generate an edit plan first" : undefined}>Preview (540x960)</button>
         <button onClick={() => doRender(false)}
-          disabled={actionBusy || (needsReview && !reviewAcknowledged)}>Render (1080x1920)</button>
+          disabled={actionBusy || !parsedPlan || (needsReview && !reviewAcknowledged)} title={actionBusy ? "Wait for the current plan action" : !parsedPlan ? "Generate an edit plan first" : needsReview && !reviewAcknowledged ? "Acknowledge the marked captions and framing checks first" : undefined}>Render (1080x1920)</button>
         {actionBusy && <span className="muted" role="status">Preparing your request…</span>}
-        <button className="secondary" disabled={actionBusy} onClick={() => void downloadPlan()}>Download plan.json</button>
+        <button className="secondary" disabled={actionBusy || !parsedPlan} title={actionBusy ? "Wait for the current plan action" : !parsedPlan ? "Generate an edit plan first" : undefined} onClick={() => void downloadPlan()}>Download plan.json</button>
       </div>
     </div>
   );
@@ -693,13 +700,13 @@ function ReviewCorrectionsPanel({ corrections, dismissed, transcript, jobId, bus
                 <b>{c.new}</b>
                 <span className="muted" style={{ fontSize: 11, flex: 1 }}>{(c.confidence * 100).toFixed(0)}% &mdash; {c.reason}</span>
                 <button className="secondary" aria-label={`Play audio for ${c.old}`} style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => playWord(c)} title="Play word audio">&#9654;</button>
-                <button disabled={busy} style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => onAccept(c)}>Accept</button>
-                <button disabled={busy} className="secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => onReject(c)}>Reject</button>
+                <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => onAccept(c)}>Accept</button>
+                <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} className="secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => onReject(c)}>Reject</button>
               </div>
             ))}
           </div>
           {highConf.length > 0 && (
-            <button disabled={busy} onClick={onAcceptAllHigh}>
+            <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={onAcceptAllHigh}>
               Accept all high-confidence ({highConf.length})
             </button>
           )}

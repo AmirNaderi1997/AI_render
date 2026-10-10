@@ -73,8 +73,8 @@ export function InstagramSettingsPanel({ onChanged }: { onChanged?: (status: Ins
           autoComplete="new-password" spellCheck={false} disabled={busy} />
       </label>)}
       <div className="hm-account-actions">
-        <button className="hm-btn hm-btn-primary" type="submit" disabled={busy}>{busy ? 'Working…' : 'Save'}</button>
-        <button className="hm-btn hm-btn-quiet" type="button" onClick={disconnect} disabled={busy || !configured}>Disconnect</button>
+        <button className="hm-btn hm-btn-primary" type="submit" disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined}>{busy ? 'Working…' : 'Save'}</button>
+        <button className="hm-btn hm-btn-quiet" type="button" onClick={disconnect} disabled={busy || !configured} title={(busy || !configured) ? "Connect Instagram first." : undefined}>Disconnect</button>
       </div>
     </form>
   </section>;

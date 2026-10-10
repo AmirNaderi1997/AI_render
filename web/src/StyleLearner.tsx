@@ -183,7 +183,7 @@ export default function StyleLearner() {
           onDrop={e => { e.preventDefault(); if (!uploading && !busy && !loading) void handleUpload(e.dataTransfer.files); }}
         >
           <p role={uploading ? "status" : undefined}>{uploading ? `Uploading/analyzing... ${uploadPercent}% uploaded` : "Drag & drop reference reels here (MP4, MOV, MKV, WEBM, M4V; 500 MB max each)"}</p>
-          <input ref={fileInput} type="file" accept=".mp4,.mov,.mkv,.webm,.m4v" multiple
+          <input ref={fileInput} type="file" accept=".mp4,.mov,.mkv,.webm,.m4v" multiple aria-label="Upload reference reels"
             onChange={e => void handleUpload(e.target.files)} disabled={uploading || busy || loading} />
         </div>
         {uploadMsg && <pre className="muted" role="status" style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{uploadMsg}</pre>}
@@ -200,7 +200,7 @@ export default function StyleLearner() {
                   <span className="muted">
                     {a.total_duration?.toFixed(1)}s · {a.cut_count} cuts · avg {a.cut_lengths?.avg?.toFixed(2)}s
                   </span>
-                  <button type="button" className="danger-sm" aria-label={`Remove ${a.source_file || a._file}`} disabled={uploading || busy || loading} onClick={() => void handleDeleteAnalysis(a._file)}>&#10005;</button>
+                  <button type="button" className="danger-sm" aria-label={`Remove ${a.source_file || a._file}`} disabled={uploading || busy || loading} title={(uploading || busy || loading) ? "Wait for loading to finish." : undefined} onClick={() => void handleDeleteAnalysis(a._file)}>&#10005;</button>
                 </div>
                 <div style={{ display: "flex", gap: 16, fontSize: 12, marginTop: 6 }}>
                   <span>Min cut: {a.cut_lengths?.min?.toFixed(2)}s</span>
@@ -369,9 +369,9 @@ export default function StyleLearner() {
             disabled={!profile?.active || uploading || busy || loading} />
           Apply learned style to future plans without a pinned style
         </label>
-        <button className="secondary" disabled={uploading || busy || loading || !Object.keys(profile?.metrics || {}).length} onClick={() => void handleReset()}>Reset to Default</button>
+        <button className="secondary" disabled={uploading || busy || loading || !Object.keys(profile?.metrics || {}).length} title={(uploading || busy || loading || !Object.keys(profile?.metrics || {}).length) ? "Analyze reference reels before saving a style." : undefined} onClick={() => void handleReset()}>Reset to Default</button>
         {analyses.length > 0 && (
-          <button disabled={uploading || busy || loading} onClick={() => void handleRebuild()}>Rebuild Profile</button>
+          <button disabled={uploading || busy || loading} title={(uploading || busy || loading) ? "Wait for loading to finish." : undefined} onClick={() => void handleRebuild()}>Rebuild Profile</button>
         )}
       </div>
     </div>

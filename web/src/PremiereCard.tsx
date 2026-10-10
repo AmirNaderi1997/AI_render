@@ -130,14 +130,14 @@ export function PremiereCard({ id, savePlan, renderDone = false }: { id: string;
       <p className="muted">Expires in fifteen minutes and can be used once.</p>
     </div>}
     <div className="premiere-actions">
-      <button disabled={busy || !local || !app || state?.project_state !== "linked_current" || !renderReady} onClick={() => void connectBridge()}>Connect inside Premiere</button>
-      <button disabled={busy || !local || !app || state?.editable_plan === "missing"} onClick={() => void act("editable_plan")}>Open editable plan in Premiere</button>
-      <button disabled={busy || !local || !app || !renderReady} onClick={() => void act("rendered_video")}>Open rendered video in Premiere</button>
-      <button disabled={busy || !local || !app || !renderReady} onClick={() => void act("plan_and_render")}>
+      <button disabled={busy || !local || !app || state?.project_state !== "linked_current" || !renderReady} title={(busy || !local || !app || state?.project_state !== "linked_current" || !renderReady) ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void connectBridge()}>Connect inside Premiere</button>
+      <button disabled={busy || !local || !app || state?.editable_plan === "missing"} title={(busy || !local || !app || state?.editable_plan === "missing") ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void act("editable_plan")}>Open editable plan in Premiere</button>
+      <button disabled={busy || !local || !app || !renderReady} title={(busy || !local || !app || !renderReady) ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void act("rendered_video")}>Open rendered video in Premiere</button>
+      <button disabled={busy || !local || !app || !renderReady} title={(busy || !local || !app || !renderReady) ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void act("plan_and_render")}>
         {state?.project_state === "not_linked" ? "Set up Premiere project (manual)" : state?.project_state === "linked_outdated" ? "Reveal updated files in Finder" : "Open linked Premiere project"}
       </button>
-      <button className="secondary" disabled={busy || !local || state?.editable_plan === "missing"} onClick={() => void act("reveal")}>Reveal import files</button>
-      <button className="secondary" disabled={busy || !local || state?.editable_plan === "missing"} onClick={() => void link()}>Link clean Premiere project</button>
+      <button className="secondary" disabled={busy || !local || state?.editable_plan === "missing"} title={(busy || !local || state?.editable_plan === "missing") ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void act("reveal")}>Reveal import files</button>
+      <button className="secondary" disabled={busy || !local || state?.editable_plan === "missing"} title={(busy || !local || state?.editable_plan === "missing") ? "Premiere must be available locally with the required project files." : undefined} onClick={() => void link()}>Link clean Premiere project</button>
     </div>
     {steps && <ol className="muted">{steps.map((s, i) => <li key={i}>{s}</li>)}</ol>}
     {message && <p role="status" dir="auto">{message}</p>}
@@ -145,15 +145,15 @@ export function PremiereCard({ id, savePlan, renderDone = false }: { id: string;
     <p className="muted">The bridge controls and verifies Premiere from inside the app. The other Open/Reveal buttons are macOS file handoffs only and never claim Timeline or caption success.</p>
     {renderDone && <div className="premiere-export">
       <p>Includes: Video + Audio + Narration + Music + Captions (when present in this job).</p>
-      <button disabled={busy} onClick={() => void transfer(api.premiereUrl(id), `ai-render-${id}-premiere.zip`)}>Export to Premiere Pro · Download ZIP</button>
+      <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void transfer(api.premiereUrl(id), `ai-render-${id}-premiere.zip`)}>Export to Premiere Pro · Download ZIP</button>
       {downloading && <progress aria-label="Premiere ZIP download progress" value={downloadProgress ?? undefined} max={100} />}
       {downloading && <span role="status">{downloadProgress === null ? "Downloading…" : `Downloading ${downloadProgress}%`}</span>}
       {downloaded && <p role="status">Download started. Unzip → In Premiere Pro, create a project and import project_premiere.xml (File → Import). Then import premiere_captions.srt and save the project as .prproj.</p>}
     </div>}
     <div className="premiere-actions">
-      <button disabled={busy} onClick={() => void transfer(api.premiereXmlUrl(id), "project_premiere.xml")}>Download XML</button>
-      <button disabled={busy} onClick={() => void transfer(api.premiereCaptionsUrl(id), "premiere_captions.srt")}>Download SRT</button>
-      <button disabled={busy} onClick={() => void transfer(api.premiereReportUrl(id), "premiere_transition_report.json", true)}>Compatibility report</button>
+      <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void transfer(api.premiereXmlUrl(id), "project_premiere.xml")}>Download XML</button>
+      <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void transfer(api.premiereCaptionsUrl(id), "premiere_captions.srt")}>Download SRT</button>
+      <button disabled={busy} title={(busy) ? "Wait for the current action to finish." : undefined} onClick={() => void transfer(api.premiereReportUrl(id), "premiere_transition_report.json", true)}>Compatibility report</button>
     </div>
     <details className="premiere-guide" dir="rtl">
       <summary>راهنمای قدم‌به‌قدم اتصال به پریمیر</summary>

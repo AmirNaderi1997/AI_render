@@ -20,7 +20,7 @@
   /* Text hierarchy */
   --text: #f0f1f4;
   --text-secondary: #a0a4b0;
-  --text-tertiary: #6b6f7e;
+  --text-tertiary: #a0a5b3;
   --text-inverse: #0f1117;
 
   /* Brand accent — electric blue-violet */
@@ -342,13 +342,13 @@ button {
   transition: all var(--duration-fast);
   position: relative;
   white-space: nowrap;
-  background: var(--accent);
+  background: #4f46e5;
   color: white;
   box-shadow: 0 1px 2px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.1);
 }
 
 button:hover {
-  background: var(--accent-hover);
+  background: #4338ca;
   transform: translateY(-1px);
   box-shadow: var(--shadow-md), 0 0 20px rgba(99,102,241,0.2);
 }
@@ -363,6 +363,12 @@ button:disabled {
   cursor: not-allowed;
   transform: none !important;
   box-shadow: none !important;
+}
+
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
+input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 3px;
 }
 
 button.secondary {
@@ -1465,6 +1471,7 @@ video {
 .landing-hero {
   text-align: center;
   max-width: 640px;
+  width: 100%;
   position: relative;
   z-index: 1;
 }
@@ -1515,13 +1522,14 @@ video {
   font-size: 15px;
   font-weight: 700;
   border-radius: var(--radius-md);
-  background: var(--gradient-brand);
+  background: #4f46e5;
   color: white;
   border: none;
   box-shadow: var(--shadow-glow);
 }
 
 .landing-btn-primary:hover {
+  background: #4338ca;
   transform: translateY(-2px);
   box-shadow: var(--shadow-glow), var(--shadow-lg);
 }
@@ -1546,7 +1554,7 @@ video {
 
 .landing-features {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 20px;
   max-width: 960px;
   width: 100%;
@@ -1775,10 +1783,10 @@ video {
   min-height: 40px;
   border-radius: var(--radius-sm);
   color: white;
-  background: var(--accent);
+  background: #4f46e5;
   font-weight: 600;
 }
-.button-link:hover { color: white; background: var(--accent-hover); transform: translateY(-1px); }
+.button-link:hover { color: white; background: #4338ca; transform: translateY(-1px); }
 
 .ui-state { padding: 28px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
 .ui-loading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--text-secondary); }
@@ -1825,6 +1833,12 @@ main { min-width: 0; }
   .card, .library-card, .ve-item { min-width: 0; }
   img, video, audio { max-width: 100%; }
   table { display: block; max-width: 100%; overflow-x: auto; }
+  .landing { padding-inline: 16px; }
+  .landing-title { overflow-wrap: anywhere; }
+  .landing-cta a { min-width: 0; white-space: normal; text-align: center; }
+  .job-item, .ve-item, .section-header { max-width: 100%; }
+  .job-meta, .job-id, .ve-item input, .ve-item textarea { min-width: 0; overflow-wrap: anywhere; }
+  .card .row { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }

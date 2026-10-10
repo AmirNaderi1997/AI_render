@@ -92,7 +92,7 @@ function UserNav() {
   return (
     <div className="nav-user">
       {user && <span className="nav-user-name">{user.name}</span>}
-      <button className="nav-logout-btn" onClick={handleLogout} disabled={loggingOut}>{loggingOut ? "Logging out…" : "Log out"}</button>
+      <button className="nav-logout-btn" onClick={handleLogout} disabled={loggingOut} title={(loggingOut) ? "Wait for the current action to finish." : undefined}>{loggingOut ? "Logging out…" : "Log out"}</button>
     </div>
   );
 }

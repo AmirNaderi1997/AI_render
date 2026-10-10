@@ -33,7 +33,7 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
   const poll = React.useCallback(() => {
     if (polling.current) return;
     polling.current = true;
-    return api.qcStatus(jobId).then(status => { setQC(status); return status; }).catch(e => {
+    return api.qcStatus(jobId).then(status => { setQC(status); setError(""); return status; }).catch(e => {
       setError(friendlyError(e, "load quality check status"));
       return null;
     })
@@ -117,7 +117,7 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
 
       {initialLoading && <LoadingState label="Loading quality check…" rows={2} />}
       {!initialLoading && !isRunning && qc?.status !== "done" && (
-        <button onClick={startQC} disabled={loading}>
+        <button onClick={startQC} disabled={loading} title={loading ? "Starting quality check" : undefined}>
           {loading ? "Starting…" : "Run QC Check"}
         </button>
       )}
@@ -132,7 +132,7 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
         </div>
       )}
 
-      {error && <p className="errors" role="alert" style={{ marginTop: 8 }}>{error}</p>}
+      {error && <p className="errors" role="alert" style={{ marginTop: 8 }}>{error} <button className="secondary" onClick={() => void poll()} disabled={polling.current} title={polling.current ? "Checking quality status" : undefined}>Retry</button></p>}
 
       {qc?.status === "done" && qc.issues.length > 0 && (
         <>
@@ -163,6 +163,7 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
                 <button
                   onClick={() => applyFixes([i])}
                   disabled={applying || ignored.has(i)}
+                  title={applying ? "Applying quality fixes" : ignored.has(i) ? "Restore this issue before applying a fix" : undefined}
                   aria-label={`Apply fix for issue at ${issue.timestamp?.toFixed(1)} seconds`}
                   style={{ fontSize: 12, padding: "4px 10px" }}
                 >
@@ -170,6 +171,8 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
                 </button>
                 <button
                   onClick={() => toggleIgnore(i)}
+                  disabled={applying}
+                  title={applying ? "Applying quality fixes" : undefined}
                   aria-label={`${ignored.has(i) ? "Restore" : "Ignore"} issue at ${issue.timestamp?.toFixed(1)} seconds`}
                   style={{ fontSize: 12, padding: "4px 10px", background: "transparent", border: "1px solid var(--border)" }}
                 >
@@ -180,7 +183,7 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
           </div>
 
           <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <button onClick={applyAll} disabled={applying || ignored.size === qc.issues.length}>
+            <button onClick={applyAll} disabled={applying || ignored.size === qc.issues.length} title={applying ? "Applying quality fixes" : ignored.size === qc.issues.length ? "Restore an issue to apply a fix" : undefined}>
               {applying ? "Applying…" : "Fix All & Re-render"}
             </button>
           </div>

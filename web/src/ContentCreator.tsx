@@ -1,7 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "./api";
-import { friendlyError } from "./ui";
+import { LoadingState, friendlyError } from "./ui";
 
 interface Scene {
   index: number;
@@ -160,7 +160,9 @@ export default function ContentCreator() {
           <h2>Prompt</h2>
           <span className="muted">Step 1</span>
         </div>
+        <label htmlFor="content-prompt">Describe your content</label>
         <textarea
+          id="content-prompt"
           aria-label="Describe the content to create"
           rows={4}
           placeholder="Describe your content..."
@@ -248,7 +250,7 @@ export default function ContentCreator() {
             </select>
           </label>
           <label>Provider
-            <select value={provider} onChange={e => setProvider(e.target.value)}>
+            <select value={provider} onChange={e => setProvider(e.target.value)} disabled={providersLoading} title={providersLoading ? "Loading media providers" : undefined}>
               {!provider && <option value="">Loading providers...</option>}
               {provider && !providers.some((p: any) => p.name === provider) && <option value={provider}>Local demo provider</option>}
               {providers.map((p: any) => (
@@ -275,13 +277,14 @@ export default function ContentCreator() {
             This provider is not configured. Choose a configured provider before generating media.
           </p>
         )}
+        {!providersLoading && !providerError && providers.length === 0 && <p className="muted" role="status">No configured media providers yet. The local demo provider is available for a placeholder storyboard.</p>}
       </div>
 
       {/* Generate Button */}
       <p className="muted">Background music is selected from your music library. After generation, preview the mix and change or upload a track in the plan editor. Voiceover uses the script for each scene.</p>
       {!scenes.length && (
         <div style={{ marginBottom: 16 }}>
-          <button onClick={onGenerateStoryboard} disabled={busy || !prompt.trim() || !provider}>
+          <button onClick={onGenerateStoryboard} disabled={busy || providersLoading || !prompt.trim() || !provider} title={busy ? "Creating storyboard" : providersLoading ? "Loading media providers" : !prompt.trim() ? "Enter a prompt first" : !provider ? "Choose a media provider" : undefined}>
             {busy ? "Generating..." : "Generate Storyboard"}
           </button>
         </div>
@@ -347,6 +350,7 @@ export default function ContentCreator() {
                 <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
                   <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Text overlay</span>
                   <input
+                    dir="auto"
                     type="text"
                     disabled={busy || generating}
                     value={scene.text_overlay}
@@ -360,6 +364,7 @@ export default function ContentCreator() {
               <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
                 <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Voiceover script</span>
                 <textarea
+                  dir="auto"
                   rows={2}
                   disabled={busy || generating}
                   value={scene.narration_text || ""}
@@ -372,6 +377,7 @@ export default function ContentCreator() {
               <label>Scene duration (seconds)
                 <input type="number" min={0.5} max={90} step={0.5}
                   disabled={busy || generating || contentType === "post"}
+                  title={contentType === "post" ? "Static posts have no duration" : busy || generating ? "Wait for generation to finish" : undefined}
                   value={scene.duration_s}
                   onChange={e => updateScene(idx, { duration_s: Number(e.target.value) })} />
               </label>
@@ -379,15 +385,15 @@ export default function ContentCreator() {
               <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
                 <button className="secondary" style={{ padding: "4px 10px", fontSize: 12 }}
                   aria-label={`Move scene ${idx + 1} earlier`}
-                  disabled={busy || generating || idx === 0} onClick={() => moveScene(idx, -1)}>
+                  disabled={busy || generating || idx === 0} title={idx === 0 ? "Already the first scene" : busy || generating ? "Wait for generation to finish" : undefined} onClick={() => moveScene(idx, -1)}>
                   &#9650;
                 </button>
                 <button className="secondary" style={{ padding: "4px 10px", fontSize: 12 }}
                   aria-label={`Move scene ${idx + 1} later`}
-                  disabled={busy || generating || idx === scenes.length - 1} onClick={() => moveScene(idx, 1)}>
+                  disabled={busy || generating || idx === scenes.length - 1} title={idx === scenes.length - 1 ? "Already the last scene" : busy || generating ? "Wait for generation to finish" : undefined} onClick={() => moveScene(idx, 1)}>
                   &#9660;
                 </button>
-                <button className="danger-sm" aria-label={`Delete scene ${idx + 1}`} disabled={busy || generating} onClick={() => deleteScene(idx)}>
+                <button className="danger-sm" aria-label={`Delete scene ${idx + 1}`} disabled={busy || generating} title={busy || generating ? "Wait for generation to finish" : undefined} onClick={() => deleteScene(idx)}>
                   &#10005;
                 </button>
               </div>
@@ -407,7 +413,7 @@ export default function ContentCreator() {
           </div>
 
           <div style={{ marginTop: 12 }}>
-            <button onClick={onApprove} disabled={busy || generating || scenes.length === 0}>
+            <button onClick={onApprove} disabled={busy || generating || scenes.length === 0} title={busy || generating ? "Generation in progress" : scenes.length === 0 ? "Add at least one scene" : undefined}>
               {generating ? "Generating media..." : "Approve & Generate"}
             </button>
           </div>
@@ -415,6 +421,7 @@ export default function ContentCreator() {
       )}
 
       {/* Generation Progress */}
+      {generating && !genStatus && <LoadingState label="Checking storyboard generation…" rows={1} />}
       {generating && genStatus && (
         <div className="card">
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -440,7 +447,7 @@ export default function ContentCreator() {
         </div>
       )}
 
-      {providersLoading && <p className="muted" role="status">Loading media providers…</p>}
+      {providersLoading && <LoadingState label="Loading media providers…" rows={1} />}
       {err && <div className="errors" role="alert">{err}
         {providerError && <button style={{ marginLeft: 12 }} onClick={() => setProviderReload(n => n + 1)}>Retry</button>}
       </div>}

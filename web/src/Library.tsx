@@ -18,6 +18,7 @@ export default function Library() {
   const [rescanning, setRescanning] = React.useState(false);
   const [mutating, setMutating] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(true);
   const [editAsset, setEditAsset] = React.useState<LibraryAsset | null>(null);
   const [editTags, setEditTags] = React.useState("");
   const [editMood, setEditMood] = React.useState("");
@@ -50,12 +51,14 @@ export default function Library() {
   }, [editAsset]);
 
   const load = React.useCallback(async () => {
+    setLoading(true);
     try {
       const d = await api.getLibrary();
       setData(d);
+      setError("");
     } catch (e: any) {
       setError(friendlyError(e, "load the asset library"));
-    }
+    } finally { setLoading(false); }
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
@@ -134,19 +137,20 @@ export default function Library() {
     } finally { setMutating(false); }
   }
 
-  if (!data) return error ? <div className="errors" role="alert">{error} <button className="secondary" onClick={() => void load()}>Try again</button></div> : <LoadingState label="Loading asset library…" />;
+  if (!data) return loading ? <LoadingState label="Loading asset library…" /> : <div className="errors" role="alert">{error} <button className="secondary" onClick={() => void load()}>Try again</button></div>;
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24 }}>
-        <h1 style={{ margin: 0 }}>Asset Library / کتابخانه</h1>
-        <button onClick={handleRescan} disabled={rescanning}
+        <h1 style={{ margin: 0 }}>Asset Library / <span dir="rtl" lang="fa">کتابخانه</span></h1>
+        <button onClick={handleRescan} disabled={rescanning || loading || mutating || uploading} title={rescanning ? "Rescan in progress" : loading || mutating || uploading ? "Wait for the current library operation" : undefined}
           className="btn-secondary" style={{ marginLeft: "auto" }}>
           {rescanning ? "Rescanning..." : "Rescan folders"}
         </button>
       </div>
 
       {error && <div className="error-box" role="alert">{error} <button className="secondary" onClick={() => { setError(""); void load(); }}>Retry loading</button></div>}
+      {loading && <LoadingState label="Refreshing asset library…" rows={1} />}
       {mutating && <p className="muted" role="status">Updating asset library…</p>}
 
       {/* Category counts */}
@@ -155,8 +159,8 @@ export default function Library() {
           <button key={cat}
             className={`library-tab ${activeTab === cat ? "active" : ""}`}
             aria-pressed={activeTab === cat} onClick={() => setActiveTab(cat)}>
-            <span className="library-tab-label">{CATEGORY_LABELS[cat]}</span>
-            <span className="library-tab-count">{data.counts[cat]}</span>
+            <span className="library-tab-label" dir="auto">{CATEGORY_LABELS[cat]}</span>
+            <span className="library-tab-count" dir="ltr">{data.counts[cat]}</span>
           </button>
         ))}
       </div>
@@ -173,11 +177,11 @@ export default function Library() {
           <input aria-label="Asset description" placeholder="Description" value={uploadDesc}
             onChange={e => setUploadDesc(e.target.value)} />
         </div>
-        <label className="btn-primary upload-btn" role="button" tabIndex={uploading ? -1 : 0}
+        <label className="btn-primary upload-btn" role="button" tabIndex={uploading ? -1 : 0} aria-disabled={uploading} title={uploading ? "Upload in progress" : undefined}
           aria-label={`Upload ${CATEGORY_LABELS[activeTab].split(" /")[0]} assets`}
           onKeyDown={e => { if (!uploading && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fileRef.current?.click(); } }}>
           {uploading ? "Uploading..." : `Upload ${CATEGORY_LABELS[activeTab].split(" /")[0]}`}
-          <input ref={fileRef} type="file" multiple hidden tabIndex={-1} onChange={handleUpload}
+          <input ref={fileRef} type="file" multiple hidden tabIndex={-1} onChange={handleUpload} disabled={uploading} aria-label="Choose library assets to upload"
             accept={activeTab === "broll" ? "video/*,image/*" : "audio/*"} />
         </label>
       </div>
@@ -208,7 +212,7 @@ export default function Library() {
                 )}
               </div>
               <div className="library-card-body">
-                <div className="library-card-name" title={asset.filename}>
+                <div className="library-card-name" title={asset.filename} dir="auto">
                   {asset.filename}
                 </div>
                 {asset.duration_sec != null && (
@@ -222,8 +226,8 @@ export default function Library() {
                 {asset.mood && <span className="tag tag-mood">{asset.mood}</span>}
                 {asset.energy && <span className="tag tag-energy">E{asset.energy}</span>}
                 <div className="library-card-actions">
-                  <button className="btn-sm" onClick={() => openEdit(asset)}>Edit tags</button>
-                  <button className="btn-sm btn-danger" onClick={() => handleDelete(asset)}>Delete</button>
+                  <button className="btn-sm" onClick={() => openEdit(asset)} disabled={mutating} title={mutating ? "Wait for the current library operation" : undefined}>Edit tags</button>
+                  <button className="btn-sm btn-danger" onClick={() => handleDelete(asset)} disabled={mutating} title={mutating ? "Wait for the current library operation" : undefined}>Delete</button>
                 </div>
               </div>
             </div>
@@ -247,8 +251,8 @@ export default function Library() {
             <label htmlFor="asset-edit-description">Description</label>
             <input id="asset-edit-description" value={editDesc} onChange={e => setEditDesc(e.target.value)} />
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              <button className="btn-primary" onClick={saveEdit} disabled={mutating}>{mutating ? "Saving…" : "Save"}</button>
-              <button className="btn-secondary" onClick={() => setEditAsset(null)} disabled={mutating}>Cancel</button>
+              <button className="btn-primary" onClick={saveEdit} disabled={mutating} title={mutating ? "Saving asset details" : undefined}>{mutating ? "Saving…" : "Save"}</button>
+              <button className="btn-secondary" onClick={() => setEditAsset(null)} disabled={mutating} title={mutating ? "Saving asset details" : undefined}>Cancel</button>
             </div>
           </div>
         </div>

@@ -26,6 +26,7 @@ export default function Jobs() {
     <div>
       <h1>Jobs</h1>
       {jobs.length > 0 && <label className="jobs-search">Search jobs<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search by name or ID" /></label>}
+      {loading && jobs.length > 0 && <LoadingState label="Refreshing your jobs…" rows={1} />}
       {loading && jobs.length === 0 ? <LoadingState label="Loading your jobs…" /> : error && jobs.length === 0 ? (
         <div className="errors" role="alert">{friendlyError(error, "load your jobs")} <button className="secondary" onClick={() => void refetch()}>Try again</button></div>
       ) : jobs.length === 0 ? (
@@ -37,9 +38,9 @@ export default function Jobs() {
           {visible.length === 0 ? <EmptyState icon="⌕" title="No matching jobs" description="Try a different name or job ID." action={<button className="secondary" onClick={() => setQuery("")}>Clear search</button>} /> : <div className="jobs-list">
             {visible.map(job => (
               <NavLink key={job.id} to={`/jobs/${job.id}`} className="job-item">
-                {job.render.status === "done" && job.render.output ? <AuthenticatedMedia as="img" className="job-thumb" loading="lazy" decoding="async" alt="" src={api.exportUrl(job.id, job.render.output.replace(/\.mp4$/, "_poster.jpg"))} /> : <span className="job-thumb job-thumb-placeholder" aria-hidden="true">▶</span>}
-                <span className="job-id">{job.id}</span>
-                <span className="job-meta"><span>{job.raw_name || "Untitled"}</span></span>
+                {job.render.status === "done" && job.render.output ? <AuthenticatedMedia as="img" className="job-thumb" loading="lazy" decoding="async" alt={`Poster for ${job.raw_name || job.id}`} src={api.exportUrl(job.id, job.render.output.replace(/\.mp4$/, "_poster.jpg"))} /> : <span className="job-thumb job-thumb-placeholder" aria-hidden="true">▶</span>}
+                <span className="job-id" dir="ltr">{job.id}</span>
+                <span className="job-meta"><span dir="auto">{job.raw_name || "Untitled"}</span></span>
                 <span className={`status-badge ${statusColor(job.render.status)}`}>{job.render.status}</span>
               </NavLink>
             ))}

@@ -45,7 +45,7 @@ export default function Signup() {
         <input id="signup-password" type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 characters" required />
         <label htmlFor="signup-confirm">Confirm password</label>
         <input id="signup-confirm" type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Repeat password" required />
-        <button type="submit" disabled={loading}>{loading ? "Creating account..." : "Create account"}</button>
+        <button type="submit" disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>{loading ? "Creating account..." : "Create account"}</button>
         <div className="auth-links">
           <span>Already have an account? <Link to="/login">Log in</Link></span>
         </div>

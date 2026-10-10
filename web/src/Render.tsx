@@ -137,7 +137,7 @@ function DenoiseCard({ id }: { id: string }) {
             Clean background noise from speech audio before mixing with music and SFX.
           </p>
           {controls}
-          <button onClick={handleStart} disabled={loading}>
+          <button onClick={handleStart} disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>
             {loading ? "Starting..." : "Reduce Noise"}
           </button>
         </div>
@@ -165,7 +165,7 @@ function DenoiseCard({ id }: { id: string }) {
           <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
             {controls}
             {(level !== state.level || preserveVoice !== state.preserve_voice) && (
-              <button className="secondary" onClick={handleAdjust} disabled={loading}
+              <button className="secondary" onClick={handleAdjust} disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}
                 style={{ fontSize: 12, padding: "6px 12px" }}>
                 {loading ? "..." : "Re-process"}
               </button>
@@ -194,13 +194,13 @@ function DenoiseCard({ id }: { id: string }) {
 
           <div style={{ display: "flex", gap: 10 }}>
             {!approved && (
-              <button onClick={handleApprove} disabled={loading}>Apply Denoised Audio</button>
+              <button onClick={handleApprove} disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>Apply Denoised Audio</button>
             )}
             {!bypassed && (
-              <button className="secondary" onClick={() => handleBypass(true)} disabled={loading}>Use Original</button>
+              <button className="secondary" onClick={() => handleBypass(true)} disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>Use Original</button>
             )}
             {(approved || bypassed) && (
-              <button className="secondary" onClick={() => handleBypass(false)} disabled={loading}>
+              <button className="secondary" onClick={() => handleBypass(false)} disabled={loading} title={(loading) ? "Wait for loading to finish." : undefined}>
                 Reset Choice
               </button>
             )}
@@ -293,7 +293,7 @@ function MusicCard({ id, renderStatus, renderOutput }: { id: string; renderStatu
       {!music?.attached ? (
         <>
           <p className="muted">Add a track to mix under your video. It plays after every render automatically.</p>
-          <button disabled={locked} onClick={() => fileInput.current?.click()}>
+          <button disabled={locked} title={(locked) ? "Wait for the current music operation to finish." : undefined} onClick={() => fileInput.current?.click()}>
             {uploadPct !== null ? "Uploading…" : "Add Music"}
           </button>
         </>
@@ -319,13 +319,13 @@ function MusicCard({ id, renderStatus, renderOutput }: { id: string; renderStatu
             </div>
           </div>
           <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button className="secondary" disabled={locked} onClick={() => setPreviewNonce(n => n + 1)}>Preview Mix</button>
+            <button className="secondary" disabled={locked} title={(locked) ? "Wait for the current music operation to finish." : undefined} onClick={() => setPreviewNonce(n => n + 1)}>Preview Mix</button>
             <button disabled={locked || !rendered} onClick={() => void run(() => api.mixMusic(id, settings), "apply the music")}
               title={rendered ? undefined : "Render the video first"}>
               {mixing ? "Mixing…" : "Apply to Render"}
             </button>
-            <button className="secondary" disabled={locked} onClick={() => fileInput.current?.click()}>Replace</button>
-            <button className="secondary" disabled={locked} onClick={() => void run(() => api.removeMusic(id), "remove the music")}>Remove Music</button>
+            <button className="secondary" disabled={locked} title={(locked) ? "Wait for the current music operation to finish." : undefined} onClick={() => fileInput.current?.click()}>Replace</button>
+            <button className="secondary" disabled={locked} title={(locked) ? "Wait for the current music operation to finish." : undefined} onClick={() => void run(() => api.removeMusic(id), "remove the music")}>Remove Music</button>
           </div>
           {previewNonce > 0 && (
             <div style={{ marginTop: 12 }}>
@@ -467,9 +467,9 @@ export default function Render() {
           </div>
           <AuthenticatedMedia as="video" src={api.exportUrl(id, s.output)} controls />
           <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
-            <button disabled={downloadBusy} onClick={() => void download(api.exportUrl(id, s.output), s.output)}>{downloadBusy ? "Downloading…" : "Download"}</button>
+            <button disabled={downloadBusy} title={(downloadBusy) ? "Wait for the current download to finish." : undefined} onClick={() => void download(api.exportUrl(id, s.output), s.output)}>{downloadBusy ? "Downloading…" : "Download"}</button>
             {plan?.content_type === "post" && (
-              <button className="secondary" disabled={downloadBusy} onClick={async () => {
+              <button className="secondary" disabled={downloadBusy} title={(downloadBusy) ? "Wait for the current download to finish." : undefined} onClick={async () => {
                 setDownloadBusy(true); setDownloadError("");
                 try {
                   const blob = await api.exportImage(id);
@@ -501,7 +501,7 @@ export default function Render() {
           <h2>Previous Versions</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {s.versions.map((v: string) => (
-              <button key={v} className="secondary" disabled={downloadBusy} onClick={() => void download(api.exportUrl(id, v), v)} style={{
+              <button key={v} className="secondary" disabled={downloadBusy} title={(downloadBusy) ? "Wait for the current download to finish." : undefined} onClick={() => void download(api.exportUrl(id, v), v)} style={{
                 padding: "8px 14px",
                 background: "rgba(255,255,255,0.02)",
                 borderRadius: "var(--radius-sm)",
