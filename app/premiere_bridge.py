@@ -22,6 +22,7 @@ from typing_extensions import Literal
 
 from engine.premiere import PREMIERE_CAPTIONS, PREMIERE_XML
 from . import premiere_desktop
+from . import jobs as jobstore
 
 
 SESSION_TTL_SECONDS = 15 * 60

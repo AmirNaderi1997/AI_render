@@ -29,6 +29,7 @@ def job(tmp_path, media_dir):
     render = directory / 'exports/v1.mp4'
     render.write_bytes(b'current final render')
     result = jobs.Job(id=directory.name, dir=directory)
+    result.plan_data = data
     result.render = jobs.RenderState(status='done', output='v1.mp4',
                                      plan_sha256=desktop.sha256(directory / 'plan.json'))
     return result
@@ -171,7 +172,8 @@ def test_project_link_survives_reload_and_marks_plan_change(job):
     name = _link_clean(job)
     project = job.dir / name
     assert desktop.link_project(job, name)['status'] == 'linked'
-    reloaded = jobs.Job(id=job.id, dir=job.dir, render=job.render)
+    reloaded = jobs.Job(id=job.id, dir=job.dir, render=job.render,
+                        plan_data=job.plan_data)
     assert desktop.status(reloaded)['saved_project'] == 'linked'
     plan_file = job.dir / 'plan.json'
     plan_file.write_text(plan_file.read_text() + '\n')
@@ -190,7 +192,13 @@ def test_saving_unchanged_plan_keeps_file_bytes_and_render_current(job):
     assert desktop.status(job)['final_render'] == 'final'
     data['captions'][0]['text'] = 'changed'
     jobs.save_plan(job, data)
-    assert desktop.sha256(job.dir / 'plan.json') != before
+    assert desktop.sha256(job.dir / 'plan.json') == before
+    assert job.plan_data['captions'][0]['text'] == 'changed'
+    # The offline registry is the metadata store. Remove the media-side fixture
+    # so the exporter hashes the updated in-memory plan instead of stale bytes.
+    (job.dir / 'plan.json').unlink()
+    assert desktop.status(job)['editable_plan'] == 'stale'
+    assert desktop.status(job)['final_render'] == 'outdated'
 
 
 def test_symlink_escape_is_rejected_before_regeneration_or_link(job, tmp_path):

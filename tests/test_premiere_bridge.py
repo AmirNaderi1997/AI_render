@@ -43,6 +43,8 @@ def linked_job(tmp_path, media_dir):
                                   plan_sha256=desktop.sha256(directory / "plan.json"))
     project_name = f"ai-render-{job.id}-clean.prproj"
     (directory / project_name).write_bytes(b"saved by Premiere")
+    # Offline jobs keep plan metadata on the Job object, not in plan.json.
+    job.plan_data = data
     desktop.link_project(job, project_name)
     return job
 

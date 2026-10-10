@@ -13,6 +13,7 @@ from brain.planner import (
     _ensure_visual_effects, _apply_poster, _enforce_selected_effect,
 )
 from brain.llm import LLMUsage, _extract_json, chat_json
+from app.config import settings
 
 
 # ---- Fixtures ----
@@ -404,7 +405,10 @@ def test_jarvis_provider_mocked():
     old = sys.modules.get("openai")
     sys.modules["openai"] = fake_mod
     try:
-        with patch.dict("os.environ", env, clear=False):
+        with patch.object(settings, "LLM_PROVIDER", env["LLM_PROVIDER"]), \
+             patch.object(settings, "LLM_MODEL", env["LLM_MODEL"]), \
+             patch.object(settings, "JARVIS_API_KEY", env["JARVIS_API_KEY"]), \
+             patch.object(settings, "JARVIS_BASE_URL", env["JARVIS_BASE_URL"]):
             result, usage = chat_json("system prompt", "user prompt")
     finally:
         if old is None:
@@ -452,7 +456,10 @@ def test_openai_compatible_provider_mocked():
     old = sys.modules.get("openai")
     sys.modules["openai"] = fake_mod
     try:
-        with patch.dict("os.environ", env, clear=False):
+        with patch.object(settings, "LLM_PROVIDER", env["LLM_PROVIDER"]), \
+             patch.object(settings, "LLM_MODEL", env["LLM_MODEL"]), \
+             patch.object(settings, "LLM_API_KEY", env["LLM_API_KEY"]), \
+             patch.object(settings, "LLM_BASE_URL", env["LLM_BASE_URL"]):
             result, usage = chat_json("sys", "usr")
     finally:
         if old is None:

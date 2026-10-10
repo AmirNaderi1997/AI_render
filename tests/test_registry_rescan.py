@@ -6,11 +6,14 @@ event runs.
 from __future__ import annotations
 import json
 from pathlib import Path
+import pytest
 
 from app import jobs as jobstore
 
 
 def test_rescan_restores_job_with_plan_and_exports(tmp_path, monkeypatch):
+    if not jobstore.DB_AVAILABLE:
+        pytest.skip("job rescan requires PostgreSQL metadata persistence")
     root = tmp_path / "jobs"
     root.mkdir()
     monkeypatch.setattr(jobstore, "JOBS_ROOT", root)

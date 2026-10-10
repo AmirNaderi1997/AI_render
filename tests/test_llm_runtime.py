@@ -25,12 +25,11 @@ def test_openai_compatible_calls_use_a_bounded_timeout_without_sdk_retries():
         choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))],
         usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
     )
-    with patch.dict("os.environ", {
-        "LLM_PROVIDER": "jarvis",
-        "JARVIS_API_KEY": "test-key",
-        "JARVIS_BASE_URL": "https://example.invalid/v1",
-        "AI_PROVIDER_TIMEOUT_SECONDS": "37",
-    }, clear=True), patch("openai.OpenAI", return_value=client) as constructor:
+    with patch.object(settings, "LLM_PROVIDER", "jarvis"), \
+         patch.object(settings, "JARVIS_API_KEY", "test-key"), \
+         patch.object(settings, "JARVIS_BASE_URL", "https://example.invalid/v1"), \
+         patch.object(settings, "AI_PROVIDER_TIMEOUT_SECONDS", 37), \
+         patch("openai.OpenAI", return_value=client) as constructor:
         result, _usage = chat_json("system", "user", model="test-model", timeout_seconds=21)
 
     assert result == {"ok": True}
@@ -43,16 +42,16 @@ def test_openai_compatible_calls_use_a_bounded_timeout_without_sdk_retries():
 
 
 def test_provider_timeout_has_safe_default_and_upper_bound():
-    with patch.dict("os.environ", {}, clear=True):
+    with patch.object(settings, "AI_PROVIDER_TIMEOUT_SECONDS", 300):
         assert _provider_timeout_seconds() == 300.0
-    with patch.dict("os.environ", {"AI_PROVIDER_TIMEOUT_SECONDS": "invalid"}, clear=True):
+    with patch.object(settings, "AI_PROVIDER_TIMEOUT_SECONDS", "invalid"):
         assert _provider_timeout_seconds() == 300.0
-    with patch.dict("os.environ", {"AI_PROVIDER_TIMEOUT_SECONDS": "999999"}, clear=True):
+    with patch.object(settings, "AI_PROVIDER_TIMEOUT_SECONDS", 999999):
         assert _provider_timeout_seconds() == 600.0
 
 
 def test_timeout_override_has_same_safety_bounds_as_environment_value():
-    with patch.dict("os.environ", {"AI_PROVIDER_TIMEOUT_SECONDS": "37"}, clear=True):
+    with patch.object(settings, "AI_PROVIDER_TIMEOUT_SECONDS", 37):
         assert _provider_timeout_seconds(12) == 12.0
         assert _provider_timeout_seconds(999999) == 600.0
         assert _provider_timeout_seconds(-1) == 37.0

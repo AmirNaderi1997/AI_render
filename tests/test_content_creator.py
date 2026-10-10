@@ -478,7 +478,7 @@ def test_jarvis_story_generation_fits_voice_and_writes_plan(tmp_path, monkeypatc
         _run_generation(job.id, "jarvis_image", raise_errors=True)
 
     assert json.loads((tmp_path / "generation_status.json").read_text())["state"] == "ready"
-    plan = json.loads((tmp_path / "plan.json").read_text())
+    plan = job.plan_data
     assert plan["generation_meta"]["provider"] == "jarvis_image_motion"
     assert Path(plan["sfx"][0]["file"]).is_file()
     assert voice.is_file()
@@ -721,7 +721,8 @@ class TestContentProviderSelection:
         status_path.write_text(json.dumps({"state": "pending", "provider": "jarvis_image"}))
         job = SimpleNamespace(id="content-job", dir=tmp_path)
         thread = MagicMock()
-        with patch("brain.content_creator.CELERY_AVAILABLE", False), \
+        with patch("brain.content_creator.get_provider", return_value=SimpleNamespace(has_key=True)), \
+             patch("brain.content_creator.CELERY_AVAILABLE", False), \
              patch("brain.content_creator.threading.Thread", return_value=thread) as thread_class:
             approve_and_generate(job)
         thread_class.assert_called_once()
@@ -915,7 +916,7 @@ class TestNarration:
              patch("brain.asset_match.music_match", return_value=[SimpleNamespace(path=str(tone))]):
             _run_generation(job.id, "local_fixture", raise_errors=True)
 
-        plan = json.loads((tmp_path / "plan.json").read_text())
+        plan = job.plan_data
         assert Path(plan["music"]["file"]).is_file()
         assert plan["music"]["file"] == str(tone)
         assert plan["sfx"][0]["file"].endswith("narration_full.mp3")

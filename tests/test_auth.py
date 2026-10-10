@@ -128,7 +128,9 @@ class TestProtectedRoutes:
         assert created.status_code == 201
         job_id = created.json()["job"]["id"]
         assert created.json()["job"]["user_id"] == owner["user"]["id"]
-        assert json.loads((jobstore.JOBS_ROOT / job_id / "status.json").read_text())["user_id"] == owner["user"]["id"]
+        # Offline metadata is held by the in-memory registry; status.json is
+        # not written after the PostgreSQL migration.
+        assert jobstore.get(job_id).user_id == owner["user"]["id"]
 
         other = _signup(client, email="other@example.com").json()
         headers = {"Authorization": f"Bearer {other['access_token']}"}
@@ -157,17 +159,15 @@ class TestRefresh:
 
 
 class TestPasswordReset:
-    def test_forgot_password_generates_token(self, client):
+    def test_forgot_password_without_smtp_does_not_expose_token(self, client):
         _signup(client)
         r = client.post("/auth/forgot-password", json={"email": "test@example.com"})
-        assert r.status_code == 200
-        assert r.json()["ok"] is True
-        assert "_dev_token" in r.json()
+        assert r.status_code == 503
+        assert "_dev_token" not in r.json()
 
     def test_reset_password_valid_token(self, client):
         _signup(client)
-        r = client.post("/auth/forgot-password", json={"email": "test@example.com"})
-        token = r.json()["_dev_token"]
+        token = auth.request_reset("test@example.com")
         r = client.post("/auth/reset-password", json={"token": token, "new_password": "newpass1234"})
         assert r.status_code == 200
         r = _login(client, password="newpass1234")
@@ -180,8 +180,7 @@ class TestPasswordReset:
     def test_reset_password_expired_token(self, client, monkeypatch):
         _signup(client)
         monkeypatch.setattr(auth, "RESET_TOKEN_EXPIRES", -1)
-        r = client.post("/auth/forgot-password", json={"email": "test@example.com"})
-        token = r.json()["_dev_token"]
+        token = auth.request_reset("test@example.com")
         r = client.post("/auth/reset-password", json={"token": token, "new_password": "newpass1234"})
         assert r.status_code == 400
 

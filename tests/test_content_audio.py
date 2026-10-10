@@ -139,7 +139,7 @@ def test_requested_voiceover_failure_cannot_report_ready(tmp_path, monkeypatch):
 def test_corrupt_library_track_does_not_hide_next_playable_track(tmp_path, monkeypatch):
     from brain import content_creator
     from brain.media_provider import MediaResult
-    job = SimpleNamespace(id="library-test", dir=tmp_path, raw_name=None)
+    job = SimpleNamespace(id="library-test", dir=tmp_path, raw_name=None, plan_data=None)
     sb = Storyboard(prompt="test", content_type="reel", language="en", style="rafiei_reel",
                     scenes=[Scene(index=0, description="test", duration_s=1)])
     (tmp_path / "storyboard.json").write_text(json.dumps(sb.to_dict()))
@@ -158,7 +158,7 @@ def test_corrupt_library_track_does_not_hide_next_playable_track(tmp_path, monke
         return {"streams": [{"codec_type": "audio"}]}
     monkeypatch.setattr("engine.probe.probe", probe)
     _run_generation(job.id, "test", raise_errors=True)
-    plan = json.loads((tmp_path / "plan.json").read_text())
+    plan = job.plan_data
     assert plan["music"]["file"] == str(good)
     assert not plan["sfx"]
 
@@ -191,9 +191,10 @@ def test_generated_source_preview_uses_job_local_plan_source(tmp_path, monkeypat
     source = tmp_path / "generated" / "clip.mp4"
     source.parent.mkdir()
     source.write_bytes(b"video")
-    (tmp_path / "plan.json").write_text(json.dumps({"source_type": "generated", "source": str(source)}))
-    monkeypatch.setattr("app.jobs.get", lambda _: SimpleNamespace(dir=tmp_path, raw_name=None))
-    assert Path(get_raw("test").path) == source
+    job = SimpleNamespace(dir=tmp_path, raw_name=None,
+                          plan_data={"source_type": "generated", "source": str(source)})
+    monkeypatch.setattr("app.routers.jobs.get_job_for_request", lambda *_args, **_kwargs: job)
+    assert Path(get_raw("test", None).path) == source
 
 
 @pytest.mark.parametrize("preview", [True, False])

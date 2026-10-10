@@ -196,7 +196,11 @@ class TestDenoisePlanSync:
         (tmp_path / "plan.json").write_text("{}")
         plan = {"source": "raw/source.mp4", "denoise": {
             "enabled": True, "strength": 0.5, "audio_file": "audio/old.wav"}}
-        monkeypatch.setattr(jobstore, "get", lambda _id: SimpleNamespace(dir=tmp_path))
+        source = tmp_path / "raw" / "source.mp4"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"source")
+        job = SimpleNamespace(dir=tmp_path, raw_name="source.mp4", plan_data=plan)
+        monkeypatch.setattr(jobstore, "get", lambda _id: job)
         monkeypatch.setattr(jobstore, "load_plan", lambda _job: dict(plan))
         def save_plan(_job, data):
             plan.clear()
@@ -223,7 +227,7 @@ class TestDenoisePlanSync:
         cleaned = tmp_path / "audio" / "clean.wav"
         cleaned.parent.mkdir()
         cleaned.write_bytes(b"audio")
-        job = SimpleNamespace(dir=tmp_path)
+        job = SimpleNamespace(dir=tmp_path, plan_data={"source": "raw/source.mp4"})
         plan = {"source": "raw.mp4"}
         monkeypatch.setattr(jobstore, "load_plan", lambda _job: dict(plan))
         saved = {}

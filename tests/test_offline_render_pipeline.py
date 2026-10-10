@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -70,7 +71,8 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
     jobs_root = tmp_path / "jobs"
     monkeypatch.setattr(jobstore, "JOBS_ROOT", jobs_root)
     monkeypatch.setattr(jobstore, "_jobs", {})
-    monkeypatch.setattr(auth, "get_current_user_from_token", lambda _token: object())
+    monkeypatch.setattr(auth, "get_current_user_from_token",
+                        lambda _token: SimpleNamespace(id="offline-test-user"))
 
     # Keep font import/approval inside this test's temporary storage.
     font_root = tmp_path / "font-library"
@@ -171,7 +173,7 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
 
         created = client.post("/jobs", headers=auth_headers,
                               files={"video": (raw.name, raw.read_bytes(), "video/mp4")})
-        assert created.status_code == 200, created.text
+        assert created.status_code == 201, created.text
         job = created.json()["job"]
         job_id = job["id"]
         job_dir = Path(job["dir"])
@@ -215,7 +217,7 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
         })
         assert generated.status_code == 200, generated.text
         _wait_for(client, f"/jobs/{job_id}/generate-plan/status", "done")
-        plan = json.loads((job_dir / "plan.json").read_text())
+        plan = client.get(f"/jobs/{job_id}", headers=auth_headers).json()["plan"]
 
         assert plan["music"]["file"] == music_response.json()["path"]
         assert plan["canvas"]["caption_font_id"] == font_id
@@ -230,7 +232,7 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
         for preview in (True, False):
             started = client.post(f"/jobs/{job_id}/render?preview={str(preview).lower()}&loudnorm=true",
                                   headers=auth_headers)
-            assert started.status_code == 200, started.text
+            assert started.status_code == 202, started.text
             _wait_for(client, f"/jobs/{job_id}/render/status", "done")
             current = jobstore.get(job_id)
             assert current is not None and current.render.output

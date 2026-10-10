@@ -369,10 +369,14 @@ def _make_fake_transcribe_env(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kw):
         # cmd[-1] is the output wav path (may equal wav_path if same dir)
+        if cmd and Path(cmd[0]).name == "ffprobe":
+            return type("R", (), {"returncode": 0, "stdout": json.dumps({
+                "streams": [{"codec_type": "video"}, {"codec_type": "audio"}],
+            })})()
         dest = cmd[-1]
         if str(dest) != str(wav_path):
             import shutil; shutil.copy(str(wav_path), dest)
-        return type("R", (), {"returncode": 0})()
+        return type("R", (), {"returncode": 0, "stdout": ""})()
     monkeypatch.setattr(sp_mod, "run", fake_run)
     return captured
 
@@ -449,6 +453,7 @@ def test_accept_correction_saves_to_glossary_via_api(tmp_path, monkeypatch):
 
     # Prepare a minimal job directory
     import app.jobs as jobstore
+    monkeypatch.setattr(jobstore, "JOBS_ROOT", tmp_path / "jobs")
     job = jobstore.create_job()
 
     # Write a minimal transcript
