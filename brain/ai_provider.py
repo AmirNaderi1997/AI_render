@@ -310,7 +310,7 @@ class SaroviProvider(_ExternalProvider):
     def __init__(self) -> None:
         self.api_key = _config("SAROVI_API_KEY")
         self.api_url = _config("SAROVI_API_URL", default=_DEFAULT_SAROVI_URL) or _DEFAULT_SAROVI_URL
-        self.model = _config("LLM_MODEL", default="anthropic/claude-sonnet-5") or "anthropic/claude-sonnet-5"
+        self.model = _config("LLM_MODEL") or settings.LLM_MODEL
 
     def _responses_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
         started = time.monotonic()

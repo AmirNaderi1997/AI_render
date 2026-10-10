@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     AI_TIMEOUT_SECONDS: int = 60
     AI_CORRECTION_TIMEOUT_SECONDS: int = 45
     LLM_PROVIDER: str = "anthropic"
-    LLM_MODEL: str = "claude-sonnet-5-5"
+    LLM_MODEL: str = "CLAUDE_SONNET_5_5"
     VISION_PROVIDER: str = ""
     VISION_MODEL: str = "gpt-5-5-image"
     CONTENT_VOICE_PROVIDER: str = "edge"

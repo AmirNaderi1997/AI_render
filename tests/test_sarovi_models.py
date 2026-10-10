@@ -8,6 +8,7 @@ from PIL import Image
 
 def test_sarovi_plan_request_uses_responses_contract(monkeypatch):
     from brain import llm
+    from app.config import settings
 
     seen = {}
 
@@ -17,14 +18,14 @@ def test_sarovi_plan_request_uses_responses_contract(monkeypatch):
                 "usage": {"input_tokens": 3, "output_tokens": 4}}
 
     monkeypatch.setenv("LLM_PROVIDER", "sarovi")
-    monkeypatch.setenv("LLM_MODEL", "anthropic/claude-sonnet-5")
+    monkeypatch.setenv("LLM_MODEL", settings.LLM_MODEL)
     monkeypatch.setattr("brain.sarovi.request", fake_request)
     plan, usage = llm.chat_json("Return JSON", "Plan a reel", max_tokens=500)
     assert plan == {"scenes": []}
     assert usage.output_tokens == 4
     assert seen["path"] == "/responses"
     assert seen["payload"] == {
-        "model": "anthropic/claude-sonnet-5", "instructions": "Return JSON",
+        "model": settings.LLM_MODEL, "instructions": "Return JSON",
         "input": "Plan a reel", "max_output_tokens": 500,
     }
 

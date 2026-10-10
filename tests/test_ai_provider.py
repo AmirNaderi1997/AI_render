@@ -12,6 +12,7 @@ from brain.ai_provider import (
 )
 from brain.storyboard import generate_storyboard
 from brain.planner import generate_plan
+from app.config import Settings, settings
 
 
 def _plan_context() -> dict:
@@ -98,6 +99,17 @@ def test_jarvis_does_not_inherit_sarovi_text_model(monkeypatch):
     monkeypatch.setenv("JARVIS_MODEL", "")
     monkeypatch.setenv("LLM_MODEL", "sarovi-only-model")
     assert JarvisProvider().model == "DEEPSEEK_V4_FLASH"
+
+
+def test_default_llm_model_and_providers_read_settings(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("JARVIS_MODEL", raising=False)
+    assert Settings(_env_file=None).LLM_MODEL == "CLAUDE_SONNET_5_5"
+
+    monkeypatch.setattr(settings, "JARVIS_MODEL", "jarvis-model-from-settings")
+    monkeypatch.setattr(settings, "LLM_MODEL", "sarovi-model-from-settings")
+    assert JarvisProvider().model == settings.JARVIS_MODEL
+    assert SaroviProvider().model == settings.LLM_MODEL
 
 
 def test_sarovi_connection_failure_falls_back_without_exposing_key(monkeypatch, caplog):
