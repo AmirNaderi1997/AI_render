@@ -2,7 +2,7 @@
 
 Chosen by env vars:
   LLM_PROVIDER   (anthropic|openai|openai_compatible|jarvis|sarovi) – default: anthropic
-  LLM_MODEL      – text/plan model                            – default: claude-sonnet-5-5
+  LLM_MODEL      – text/plan model                            – default: CLAUDE_SONNET_5_5
   VISION_PROVIDER (anthropic|openai|openai_compatible|jarvis) – default: same as LLM_PROVIDER
   VISION_MODEL   – image-capable model (content gen/editing/hints) – default: gpt-5-5-image
 
@@ -136,7 +136,7 @@ def chat_json(
 ) -> tuple[dict, LLMUsage]:
     """Send a single-turn request expecting a JSON response.
 
-    Uses LLM_PROVIDER + LLM_MODEL (default: DEEPSEEK_V4_FLASH via jarvis).
+    Uses LLM_PROVIDER + LLM_MODEL (default: CLAUDE_SONNET_5_5).
     Returns (parsed_json, usage).
     """
     provider = _provider()
