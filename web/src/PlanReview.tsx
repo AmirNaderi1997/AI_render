@@ -351,7 +351,20 @@ export default function PlanReview() {
   return (
     <div>
       <Breadcrumbs items={[{ label: "Jobs", to: "/jobs" }, { label: job.raw_name || `Job ${job.id}` }, { label: "Plan Review" }]} />
-      <h1>{job.raw_name || `Job ${job.id}`}</h1>
+      <div className="plan-review-heading">
+        <h1>{job.raw_name || `Job ${job.id}`}</h1>
+        <div className="plan-review-save">
+          {saved && <span className="ok" role="status">Saved.</span>}
+          <button
+            type="button"
+            onClick={() => { void save(); }}
+            disabled={actionBusy || saving || !parsedPlan}
+            title={saving || actionBusy ? "Wait for the current plan action" : !parsedPlan ? "Generate an edit plan first" : "Save edits to this plan"}
+          >
+            {saving ? "Saving…" : "Save plan"}
+          </button>
+        </div>
+      </div>
       <JobWorkflow job={job} current={2} />
       {!parsedPlan && !isGenerating && <div className="empty-state" role="status"><strong>No edit plan yet</strong><p>Generate a plan from this job to review its timeline and render a reel.</p><a className="button-link" href="/new">Create a reel</a></div>}
       {parsedPlan && !isGenerating && <NextStep>Review the edit plan, then start a preview render to check the result.</NextStep>}

@@ -1228,6 +1228,26 @@ video {
   border-top: 1px solid var(--border);
 }
 
+.plan-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.plan-review-heading h1 { margin: 0; }
+
+.plan-review-save {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.plan-review-save .ok { margin: 0; padding: 7px 10px; }
+
 /* ═══════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════ */
@@ -1921,6 +1941,9 @@ main { min-width: 0; }
   .content-type-grid button { padding: 12px 5px !important; font-size: 12px; }
   .content-type-grid button .muted { font-size: 10px; }
   .section-header, .library-heading { align-items: flex-start; flex-wrap: wrap; }
+  .plan-review-heading { align-items: stretch; flex-direction: column; }
+  .plan-review-save { justify-content: stretch; }
+  .plan-review-save button { flex: 1; }
   .action-bar, .premiere-actions, .landing-cta { flex-wrap: wrap; }
   .row > label { min-width: min(100%, 220px); flex: 1; }
   .row > button { white-space: normal; }
