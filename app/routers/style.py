@@ -110,8 +110,8 @@ def get_plan_style_selection(request: Request):
     try:
         profile = get_profile(selection["style_id"], selection["version"])
     except KeyError:
-        plan_style_store.set_selection(_uid(request), None, None)
-        return {"style_id": None, "version": None, "name": None}
+        selection = plan_style_store.clear_selection(_uid(request))
+        return {**selection, "name": None}
     return {**selection, "name": profile["name"]}
 
 
@@ -121,7 +121,8 @@ def update_plan_style_selection(body: dict, request: Request):
     style_id = body.get("style_id")
     version = body.get("version")
     if style_id is None and version is None:
-        selection = plan_style_store.set_selection(_uid(request), None, None)
+        selection = (plan_style_store.clear_selection(_uid(request)) if body.get("selected") is False
+                     else plan_style_store.set_selection(_uid(request), None, None))
         return {"ok": True, **selection, "name": None}
     if (not isinstance(style_id, str) or not re.fullmatch(r"[a-f0-9]{16}", style_id)
             or not isinstance(version, int) or isinstance(version, bool) or version < 1):
@@ -212,10 +213,11 @@ def get_learned_style_profile(request: Request):
     sample_count = len(style_store.list_references(uid))
     profile = style_store.load_profile(uid)
     if not profile:
-        return {"active": False, "enabled": False, "metrics": {}, "confidence": {}, "sample_count": sample_count,
+        return {"exists": False, "active": False, "enabled": False, "metrics": {}, "confidence": {}, "sample_count": sample_count,
                 "few_shot_examples": [], "preset_overrides": {}}
     learned = profile.get("learned_metrics", {})
     return {
+        "exists": True,
         "active": learned.get("sufficient", False),
         "enabled": profile.get("enabled", True),
         "metrics": learned.get("metrics", {}),

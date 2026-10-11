@@ -43,15 +43,15 @@ def get_selection(user_id) -> dict:
             async with AsyncSessionLocal() as db:
                 row = (await db.execute(select(PlanStyleSelection).where(
                     PlanStyleSelection.user_id == int(uid)))).scalar_one_or_none()
-                return {"style_id": row.style_id, "version": row.version} if row else {
-                    "style_id": None, "version": None,
+                return {"style_id": row.style_id, "version": row.version, "selected": True} if row else {
+                    "style_id": None, "version": None, "selected": False,
                 }
         return _run(query())
     path = _path(uid)
     if not path.is_file():
-        return {"style_id": None, "version": None}
+        return {"style_id": None, "version": None, "selected": False}
     data = json.loads(path.read_text(encoding="utf-8"))
-    return {"style_id": data.get("style_id"), "version": data.get("version")}
+    return {"style_id": data.get("style_id"), "version": data.get("version"), "selected": True}
 
 
 def set_selection(user_id, style_id: str | None, version: int | None) -> dict:
@@ -78,7 +78,20 @@ def set_selection(user_id, style_id: str | None, version: int | None) -> dict:
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps({"style_id": style_id, "version": version}), encoding="utf-8")
         temporary.replace(path)
-    return {"style_id": style_id, "version": version}
+    return {"style_id": style_id, "version": version, "selected": True}
+
+
+def clear_selection(user_id) -> dict:
+    uid = _uid(user_id)
+    if DB_AVAILABLE:
+        async def clear():
+            async with AsyncSessionLocal() as db:
+                await db.execute(delete(PlanStyleSelection).where(PlanStyleSelection.user_id == int(uid)))
+                await db.commit()
+        _run(clear())
+    else:
+        _path(uid).unlink(missing_ok=True)
+    return {"style_id": None, "version": None, "selected": False}
 
 
 def clear_removed_style(style_id: str, version: int) -> None:

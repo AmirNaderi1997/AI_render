@@ -10,7 +10,7 @@ vi.mock("./ui", () => ({
 }));
 
 const activeLearned = {
-  active: true, enabled: true, sample_count: 3,
+  exists: true, active: true, enabled: true, sample_count: 3,
   metrics: { cut_length_avg: 2.5 }, confidence: {}, preset_overrides: {},
 };
 
@@ -21,10 +21,11 @@ describe("My Effects plan styles", () => {
     vi.spyOn(api, "getMyEffects").mockResolvedValue({ favorites: {}, rules: [], dislikes: [], selected_rafiei_style: null } as any);
     vi.spyOn(api, "getRafieiStyles").mockResolvedValue({ preferred_effects: [] } as any);
     vi.spyOn(api, "getStyleLibrary").mockResolvedValue({ drafts: [], profiles: [] });
-    vi.spyOn(api, "getPlanStyleSelection").mockResolvedValue({ style_id: null, version: null, name: null });
+    vi.spyOn(api, "getPlanStyleSelection").mockResolvedValue({ style_id: null, version: null, name: null, selected: false });
     vi.spyOn(api, "getLearnedProfile").mockResolvedValue(activeLearned);
     vi.spyOn(api, "updateLearnedProfile").mockResolvedValue({ ok: true });
-    vi.spyOn(api, "setPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null });
+    vi.spyOn(api, "setPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: true });
+    vi.spyOn(api, "clearPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: false });
     vi.spyOn(api, "resetLearnedProfile").mockResolvedValue({ ok: true });
   });
 
@@ -37,7 +38,7 @@ describe("My Effects plan styles", () => {
     fireEvent.click(learned);
 
     await waitFor(() => expect(api.updateLearnedProfile).toHaveBeenCalledWith({ enabled: false }));
-    expect(await screen.findByRole("button", { name: /Rafiei Reel defaults/ })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: /Rafiei Reel defaults/ })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("deletes the learned profile while retaining the explicit default choice", async () => {
@@ -45,13 +46,34 @@ describe("My Effects plan styles", () => {
     render(<MyEffects />);
     await screen.findByRole("button", { name: /Learned profile/ });
     vi.mocked(api.getLearnedProfile).mockResolvedValue({
-      active: false, enabled: false, sample_count: 3, metrics: {}, confidence: {}, preset_overrides: {},
+      exists: false, active: false, enabled: false, sample_count: 3, metrics: {}, confidence: {}, preset_overrides: {},
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Delete learned profile" }));
 
     await waitFor(() => expect(api.resetLearnedProfile).toHaveBeenCalledTimes(1));
     expect(api.setPlanStyleSelection).toHaveBeenCalledWith(null, null);
-    await waitFor(() => expect(screen.queryByRole("button", { name: /Learned profile/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete learned profile" })).toBeDisabled());
+  });
+
+  it("deselects the built-in defaults card without reselecting it", async () => {
+    vi.mocked(api.getLearnedProfile).mockResolvedValue({ ...activeLearned, enabled: false });
+    vi.mocked(api.getPlanStyleSelection).mockResolvedValue({ style_id: null, version: null, name: null, selected: true });
+    render(<MyEffects />);
+    const defaults = await screen.findByRole("button", { name: /Rafiei Reel defaults/ });
+    expect(defaults).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(defaults);
+    await waitFor(() => expect(api.clearPlanStyleSelection).toHaveBeenCalledTimes(1));
+    expect(defaults).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows Delete for an incomplete saved learned profile", async () => {
+    vi.mocked(api.getLearnedProfile).mockResolvedValue({
+      exists: true, active: false, enabled: true, sample_count: 1,
+      metrics: {}, confidence: {}, preset_overrides: {},
+    });
+    render(<MyEffects />);
+    expect(await screen.findByRole("button", { name: "Delete learned profile" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Learned profile/ })).toBeDisabled();
   });
 });
