@@ -349,7 +349,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                 "provider": voice_provider,
                             }
                         if preset["is_static"]:
-                            record = _fit_post_narration(record, gen_dir, warnings)
+                            record = _fit_post_narration(record, gen_dir, preset, warnings)
                         narration_segments.append(record)
                         cached_narration[scene.index] = record
                         checkpoint["narration"] = [cached_narration[index] for index in sorted(cached_narration)]
@@ -520,7 +520,7 @@ def _fit_video_to_narration(
     media: list[dict], narration: list[dict], gen_dir: Path,
     preset: dict, warnings: list[str],
 ) -> None:
-    """Lengthen scene video before stitching so speech is never cut mid-sentence."""
+    """Extend visuals modestly to preserve narration without creating long holds."""
     by_scene = {item["scene_index"]: item for item in narration}
     targets = []
     for item in media:
@@ -535,6 +535,16 @@ def _fit_video_to_narration(
             f"Voiceover needs {sum(targets):.1f}s, above the {preset['max_duration']}s "
             "limit. Shorten the scripts in the storyboard."
         )
+
+    max_stretch = float(preset.get("max_scene_stretch", 1.15))
+    for item, target in zip(media, targets):
+        current = float(item["duration_s"])
+        if target > current * max_stretch + 0.08:
+            raise ValueError(
+                f"Scene {item['scene_index'] + 1} narration needs {target:.1f}s, "
+                f"but its visual can be held for at most {current * max_stretch:.1f}s. "
+                "Shorten that scene's script in the storyboard."
+            )
 
     for item, target in zip(media, targets):
         current = float(item["duration_s"])
@@ -556,7 +566,9 @@ def _fit_video_to_narration(
         warnings.append(f"Scene {item['scene_index'] + 1}: visual duration extended to fit voiceover.")
 
 
-def _fit_post_narration(record: dict, gen_dir: Path, warnings: list[str]) -> dict:
+def _fit_post_narration(
+    record: dict, gen_dir: Path, preset: dict, warnings: list[str],
+) -> dict:
     """Keep every approved word while fitting moderate speech into a five second post."""
     from .tts import _get_audio_duration
 
@@ -565,9 +577,11 @@ def _fit_post_narration(record: dict, gen_dir: Path, warnings: list[str]) -> dic
         return record
     target = 4.65  # reserve room for encoder padding and the final pause
     speed = duration / target
-    if speed > 1.5:
+    max_speed = float(preset.get("max_narration_speed", 1.15))
+    if speed > max_speed:
         raise ValueError(
-            f"Post voiceover is {duration:.1f}s and would need more than 1.5x speech speed. "
+            f"Post voiceover is {duration:.1f}s and would need more than "
+            f"{max_speed:.2f}x speech speed. "
             "Shorten the approved script in the storyboard."
         )
     source = Path(record["file_path"])
@@ -592,13 +606,15 @@ def _fit_limited_narration(
     media: list[dict], narration: list[dict], gen_dir: Path,
     preset: dict, content_type: ContentType, warnings: list[str],
 ) -> None:
-    """Fit approved Story or Reel speech when extending scenes exceeds its cap."""
+    """Fit Story or Reel speech within duration and natural pacing limits."""
     from .tts import _get_audio_duration
 
     if content_type not in (ContentType.STORY, ContentType.REEL):
         raise ValueError("narration fitting is for Stories and Reels")
     label = content_type.value.capitalize()
     limit = float(preset["max_duration"])
+    max_speed = float(preset.get("max_narration_speed", 1.15))
+    max_stretch = float(preset.get("max_scene_stretch", 1.15))
     by_scene = {item["scene_index"]: item for item in narration}
     base = sum(float(item["duration_s"]) for item in media)
     if base > limit + 0.01:
@@ -611,24 +627,44 @@ def _fit_limited_narration(
         ) if item["scene_index"] in by_scene else float(item["duration_s"])
                    for item in media)
 
-    if total_at(1.0) <= limit + 0.01:
+    def stretch_speed_needed() -> float:
+        needed = 1.0
+        for item in media:
+            voice = by_scene.get(item["scene_index"])
+            if voice is None:
+                continue
+            current = float(item["duration_s"])
+            required = float(voice["duration_s"]) + 0.2
+            if required > current * max_stretch:
+                needed = max(needed, float(voice["duration_s"]) / (current * max_stretch - 0.2))
+        return needed
+
+    needed_speed = stretch_speed_needed()
+    if needed_speed > max_speed + 0.001:
+        raise ValueError(
+            f"{label} voiceover needs {needed_speed:.2f}x speed to fit its scene visuals, "
+            f"above the natural pacing limit of {max_speed:.2f}x. "
+            "Shorten the affected scripts in the storyboard."
+        )
+    if total_at(1.0) <= limit + 0.01 and needed_speed <= 1.001:
         return
     # Leave a little room for MP3 padding and frame rounding, unless the
     # approved visuals already consume nearly all available time.
     target_total = max(base, limit - 0.15)
-    if total_at(1.5) > target_total + 0.001:
+    if total_at(max_speed) > target_total + 0.001:
         raise ValueError(
-            f"{label} voiceover cannot fit within {limit:g}s at 1.5x speech speed. "
+            f"{label} voiceover cannot fit within {limit:g}s at "
+            f"{max_speed:.2f}x speech speed. "
             "Shorten the approved scripts in the storyboard."
         )
-    low, high = 1.0, 1.5
+    low, high = max(1.0, needed_speed), max_speed
     for _ in range(24):
         mid = (low + high) / 2
         if total_at(mid) <= target_total:
             high = mid
         else:
             low = mid
-    speed = min(1.5, high * 1.02)
+    speed = min(max_speed, high * 1.002)
     for record in narration:
         scene_media = next((m for m in media if m["scene_index"] == record["scene_index"]), None)
         if scene_media is None or float(record["duration_s"]) + 0.2 <= float(scene_media["duration_s"]):

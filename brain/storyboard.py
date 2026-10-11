@@ -112,11 +112,23 @@ def _build_storyboard_system_prompt(preset: dict, content_type: ContentType, lan
     is_persian = language.lower().strip() in {"fa", "per", "fas", "persian", "farsi"}
 
     if content_type == ContentType.POST:
-        scene_rule = "Produce exactly 1 scene. It is a still image (duration_s = 5.0 for display purposes)."
+        scene_rule = (
+            "Produce exactly 1 scene. It is a still image (duration_s = 5.0 for display purposes). "
+            "If narration is useful, keep it to one concise sentence that takes no more than "
+            "4.2 seconds to say."
+        )
     elif content_type == ContentType.STORY:
-        scene_rule = "Produce 1-3 scenes. Total duration must be 5-15 seconds."
+        scene_rule = (
+            "Produce 1-3 scenes. Total duration must be 5-15 seconds. Aim for 10-15 seconds, "
+            "with 1-2 concise spoken thoughts per scene and a short, natural ending."
+        )
     else:
-        scene_rule = "Produce 3-10 scenes. Total duration should be 15-90 seconds."
+        scene_rule = (
+            "Produce 5-7 scenes. Aim for a concise 20-45 second Reel, with 15-90 seconds "
+            "allowed when the brief needs it. Keep scenes around 3-7 seconds, give each "
+            "scene one concise spoken thought, and reserve the final scene for one short, "
+            "natural call to action."
+        )
 
     lang_rule = ""
     if is_persian:
@@ -133,8 +145,11 @@ def _build_storyboard_system_prompt(preset: dict, content_type: ContentType, lan
 Turn the user's brief into a distinctive, specific visual story for a {content_type.value}.
 Preserve every requested point, order, audience, tone, and call to action. Do not invent factual claims.
 Use one clear idea per scene. Open with a concrete visual hook, build curiosity or useful payoff,
-and end with the requested action. Avoid generic motivational cliches, repeated stock imagery,
-and interchangeable scenes. Vary shot distance, camera angle, action, and visual rhythm while
+and end with the requested action. Keep the spoken script short enough to sound natural at a
+measured pace; do not add a second summary or repeat the call to action. Make every scene advance
+the story with a distinct subject action and composition; never reuse the same shot or action in
+adjacent scenes. Avoid generic motivational cliches, repeated stock imagery, and interchangeable
+scenes. Vary shot distance, camera angle, action, and visual rhythm while
 keeping the palette, lighting, and location coherent across scenes. Independent image
 generation cannot reliably preserve one person's face across shots: use hands, objects,
 and action details between a small number of portraits, or present different people
@@ -170,8 +185,9 @@ Output a single JSON object with this schema:
 - text_overlay is rendered separately by the caption system, not burned into generated media
 - narration_text is the voiceover script for this scene. Write conversationally in the
   same language as text_overlay. Use one concise thought and budget no more than
-  2 spoken words per second of scene duration, including Persian. Leave a short pause
-  at the end. Use an empty string when narration is inappropriate.
+  1.7 spoken words per second of scene duration, including Persian. Leave a short pause
+  at the end. The voice must fit the scene naturally; never rely on speeding it up or
+  stretching a visual for a long hold. Use an empty string when narration is inappropriate.
 - estimated_cost: ~$0.04 per image, ~$0.10 per second of video{lang_rule}
 - Keep text_overlay concise: 2-8 words max. Make it a useful headline or point,
   not a duplicate of the whole narration. Check spelling and numbering.

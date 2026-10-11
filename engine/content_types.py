@@ -15,6 +15,8 @@ _PRESETS: dict[ContentType, dict] = {
     ContentType.REEL: {
         "aspect": "9:16",
         "max_duration": 90,
+        "max_scene_stretch": 1.15,
+        "max_narration_speed": 1.15,
         "fps": 30,
         "resolution": "1080x1920",
         "width": 1080,
@@ -24,6 +26,8 @@ _PRESETS: dict[ContentType, dict] = {
     ContentType.POST: {
         "aspect": "1:1",
         "max_duration": None,
+        "max_scene_stretch": 1.0,
+        "max_narration_speed": 1.15,
         "fps": 30,
         "resolution": "1080x1080",
         "width": 1080,
@@ -33,6 +37,8 @@ _PRESETS: dict[ContentType, dict] = {
     ContentType.STORY: {
         "aspect": "9:16",
         "max_duration": 15,
+        "max_scene_stretch": 1.15,
+        "max_narration_speed": 1.15,
         "fps": 30,
         "resolution": "1080x1920",
         "width": 1080,
