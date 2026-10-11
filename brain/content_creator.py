@@ -35,7 +35,11 @@ def _load_checkpoint(path: Path, signature: str, provider_name: str) -> dict:
     if path.exists():
         try:
             data = json.loads(path.read_text())
-            if isinstance(data, dict) and data.get("signature") == signature and data.get("provider") == provider_name:
+            # Completed scene files are reusable when a failed job is retried
+            # with another provider. The storyboard signature is the content
+            # identity; provider choice only affects scenes that still need media.
+            if isinstance(data, dict) and data.get("signature") == signature:
+                data["provider"] = provider_name
                 return data
         except (OSError, ValueError, TypeError):
             pass
@@ -191,6 +195,7 @@ def approve_and_generate(job, provider_name: Optional[str] = None) -> None:
 
     gs["state"] = "generating"
     gs["provider"] = provider_name
+    gs.pop("error", None)
     gs_path.write_text(json.dumps(gs, indent=2))
 
     if CELERY_AVAILABLE:

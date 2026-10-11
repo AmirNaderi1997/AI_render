@@ -62,6 +62,9 @@ export function friendlyError(error: unknown, action = "complete this action"): 
   if (/401|unauthori[sz]ed|session expired/i.test(message)) return "Your session has expired. Sign in again and retry.";
   if (/403|forbidden/i.test(message)) return "You do not have access to this item. Check your account and try again.";
   if (/413|too large|file size/i.test(message)) return "This file is too large. Choose a smaller file and try again.";
+  if (/sarovi.*(?:402|insufficient[_ ]credits)|(?:402|insufficient[_ ]credits).*sarovi/i.test(message)) {
+    return "Sarovi has insufficient credits for this generation. Add credits to Sarovi, or select another configured media provider and retry. Completed scenes are saved.";
+  }
   if (/network|failed to fetch|timeout|timed out|502|503|504/i.test(message)) return "We could not reach the server. Check your connection and try again.";
   if (/invalid credentials|incorrect password/i.test(message)) return "The email or password is incorrect. Check both and try again.";
   if (/already exists|already registered/i.test(message)) return "This account already exists. Sign in or use another email.";

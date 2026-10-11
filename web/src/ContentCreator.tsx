@@ -40,7 +40,7 @@ export default function ContentCreator() {
   const [generating, setGenerating] = React.useState(false);
   const [genStatus, setGenStatus] = React.useState<{
     state: string; scenes_done: number; scenes_total: number; cost_so_far: number | null;
-    cost_status?: string;
+    cost_status?: string; error?: string;
   } | null>(null);
 
   const [providerError, setProviderError] = React.useState(false);
@@ -122,7 +122,7 @@ export default function ContentCreator() {
     setBusy(true); setErr(null);
     try {
       await api.updateStoryboard(jobId, scenes);
-      await api.approveStoryboard(jobId);
+      await api.approveStoryboard(jobId, provider);
       setGenerating(true);
     } catch (e: any) {
       setErr(friendlyError(e, "approve the storyboard"));
@@ -414,7 +414,7 @@ export default function ContentCreator() {
 
           <div style={{ marginTop: 12 }}>
             <button onClick={onApprove} disabled={busy || generating || scenes.length === 0} title={busy || generating ? "Generation in progress" : scenes.length === 0 ? "Add at least one scene" : undefined}>
-              {generating ? "Generating media..." : "Approve & Generate"}
+              {generating ? "Generating media..." : genStatus?.state === "failed" ? "Retry Generation" : "Approve & Generate"}
             </button>
           </div>
         </div>

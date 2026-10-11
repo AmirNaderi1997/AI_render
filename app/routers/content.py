@@ -25,6 +25,10 @@ class StoryboardUpdateBody(BaseModel):
     scenes: list[dict]
 
 
+class StoryboardApproveBody(BaseModel):
+    provider: str | None = None
+
+
 @router.post("/create")
 def content_create(body: ContentCreateBody, request: Request):
     from brain.content_creator import create_content
@@ -63,14 +67,14 @@ def update_storyboard(job_id: str, body: StoryboardUpdateBody, request: Request)
 
 
 @legacy_router.post("/jobs/{job_id}/storyboard/approve")
-def approve_storyboard(job_id: str, request: Request):
+def approve_storyboard(job_id: str, request: Request, body: StoryboardApproveBody | None = None):
     job = get_job_for_request(request, job_id)
     sb_path = job.dir / "storyboard.json"
     if not sb_path.exists():
         raise HTTPException(400, "no storyboard to approve")
     from brain.content_creator import approve_and_generate
     try:
-        approve_and_generate(job)
+        approve_and_generate(job, provider_name=body.provider if body else None)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
     return {"status": "generating"}
