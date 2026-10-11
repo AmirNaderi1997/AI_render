@@ -11,7 +11,7 @@ export function StylePicker({ value, onChange }: { value: StyleProfile | null; o
   const [error, setError] = React.useState("");
   React.useEffect(() => { api.getStyleLibrary().then(d => setProfiles([...d.profiles].sort((a, b) => a.name.localeCompare(b.name))))
     .catch(e => setError(friendlyError(e, "load visual styles"))).finally(() => setLoading(false)); }, []);
-  return <label style={{ display: "block", marginTop: 10 }}>Visual style profile
+  return <label style={{ display: "block", marginTop: 10 }}>Plan style profile
     <select
       value={value ? `${value.style_id}@${value.version}` : "default"}
       onChange={e => {
@@ -19,7 +19,7 @@ export function StylePicker({ value, onChange }: { value: StyleProfile | null; o
         const found = profiles.find(p => `${p.style_id}@${p.version}` === e.target.value);
         onChange(found || null);
       }}>
-      <option value="default">{loading ? "Loading styles…" : "Rafiei Reel (default)"}</option>
+      <option value="default">{loading ? "Loading styles…" : "Learned style when active (otherwise Rafiei Reel)"}</option>
       {profiles.map(p => <option key={`${p.style_id}@${p.version}`} value={`${p.style_id}@${p.version}`}>{p.name} · v{p.version}</option>)}
     </select>
     {error && <span className="errors" role="alert">{error}</span>}

@@ -23,6 +23,8 @@ export default function NewReel() {
   const [planText, setPlanText] = React.useState("");
   const [style, setStyle] = React.useState("rafiei_reel");
   const [styleProfile, setStyleProfile] = React.useState<StyleProfile | null>(null);
+  const [planStyleLoading, setPlanStyleLoading] = React.useState(true);
+  const [learnedProfile, setLearnedProfile] = React.useState<any>(null);
   const [fonts, setFonts] = React.useState<string[]>([]);
   const [optionsLoading, setOptionsLoading] = React.useState(true);
   const [optionsError, setOptionsError] = React.useState("");
@@ -66,14 +68,27 @@ export default function NewReel() {
   }, []);
 
   React.useEffect(() => {
-    const styleId = searchParams.get("style_id");
-    const version = Number(searchParams.get("style_version"));
-    if (!styleId || !Number.isInteger(version)) return;
-    api.getStyleLibrary().then(library => {
-      const selected = library.profiles.find(p => p.style_id === styleId && p.version === version);
+    let cancelled = false;
+    const requestedStyleId = searchParams.get("style_id");
+    const requestedVersion = Number(searchParams.get("style_version"));
+    Promise.all([api.getStyleLibrary(), api.getPlanStyleSelection()]).then(([library, saved]) => {
+      if (cancelled) return;
+      const styleId = requestedStyleId || saved.style_id;
+      const version = requestedStyleId ? requestedVersion : saved.version;
+      const selected = styleId && version != null
+        ? library.profiles.find(p => p.style_id === styleId && p.version === version)
+        : null;
       if (selected) setStyleProfile(selected);
-    }).catch(e => setOptionsError(friendlyError(e, "load the selected style")));
+      else if (requestedStyleId || saved.style_id) setOptionsError("The saved plan style is no longer available. Choose another approved style or use the learned profile.");
+    }).catch(e => { if (!cancelled) setOptionsError(friendlyError(e, "load the saved plan style")); })
+      .finally(() => { if (!cancelled) setPlanStyleLoading(false); });
+    return () => { cancelled = true; };
   }, [searchParams]);
+
+  React.useEffect(() => {
+    api.getLearnedProfile().then(setLearnedProfile)
+      .catch(e => setOptionsError(current => current || friendlyError(e, "load the learned style status")));
+  }, []);
 
   React.useEffect(() => {
     const stop = (e: DragEvent) => e.preventDefault();
@@ -155,6 +170,7 @@ export default function NewReel() {
 
   async function onGenerate() {
     if (!video) { setVideoError("Select a raw video first."); return; }
+    if (planStyleLoading) return;
     setBusy(true); setErr(null); setUploadFailed(false); setUploadPct(0);
     const controller = new AbortController();
     uploadController.current = controller;
@@ -242,7 +258,7 @@ export default function NewReel() {
       {/* Step 2 - Style */}
       <div className="card">
         <div className="section-header">
-          <h2>Style & Speech</h2>
+          <h2>Plan style &amp; speech</h2>
           <span className="muted">Step 2</span>
         </div>
         <div className="row" style={{ gap: 16, marginBottom: 12 }}>
@@ -252,8 +268,17 @@ export default function NewReel() {
             </select>
           </label>
         </div>
-        <StylePicker value={styleProfile} onChange={setStyleProfile} />
-        <p className="muted" style={{ marginTop: 8 }}>Manage approved visual styles and imported fonts in <a href="/style-library">Styles & Fonts Library</a>.</p>
+        <div style={{ padding: 14, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--bg-elevated)" }}>
+          <StylePicker value={styleProfile} onChange={setStyleProfile} />
+          <p className="muted" role="status" style={{ margin: "8px 0 0" }}>
+            {styleProfile
+              ? `This plan will use ${styleProfile.name} · v${styleProfile.version}. Its pinned style takes priority over your learned reel profile.`
+              : learnedProfile?.active && learnedProfile?.enabled
+                ? `No imported plan style selected. Your learned profile (${learnedProfile.sample_count} reels) will be applied automatically.`
+                : "No imported plan style selected. The Rafiei Reel defaults will be used unless your learned profile is active."}
+          </p>
+        </div>
+        <p className="muted" style={{ marginTop: 8 }}>Choose a one-time override here, or set a default in <a href="/my-effects">My Effects → Plan styles</a>. Manage approved styles in <a href="/style-library">Styles &amp; Fonts Library</a>.</p>
 
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
           <label style={{ display: "block", marginBottom: 12 }}>Caption font
@@ -393,7 +418,7 @@ export default function NewReel() {
           <span className="muted">Step 4</span>
         </div>
         <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 16 }}>
-          <button onClick={onGenerate} disabled={busy || generating || !video} title={(busy || generating || !video) ? "Choose a video and complete the required plan fields first." : undefined}>
+          <button onClick={onGenerate} disabled={busy || generating || planStyleLoading || !video} title={planStyleLoading ? "Loading your saved plan style…" : (busy || generating || !video) ? "Choose a video and complete the required plan fields first." : undefined}>
             {generating ? "Generating..." : uploadFailed ? "Retry upload" : "Generate Edit Plan"}
           </button>
           <span className="muted">or upload a manual plan.json</span>

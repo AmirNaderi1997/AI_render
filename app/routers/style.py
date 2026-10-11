@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from app import jobs as jobstore
 from app import style_store
+from app import plan_style_store
 from app.job_access import get_job_for_request
 
 log = logging.getLogger(__name__)
@@ -91,8 +93,46 @@ def delete_style_draft(draft_id: str):
 @legacy_router.delete("/style-library/profiles/{style_id}/versions/{version}")
 def delete_style_profile(style_id: str, version: int):
     from engine.style_library import remove_profile
-    try: return remove_profile(style_id, version)
+    try:
+        result = remove_profile(style_id, version)
+        plan_style_store.clear_removed_style(style_id, version)
+        return result
     except KeyError: raise HTTPException(404, "approved style version not found")
+
+
+@router.get("/plan-selection")
+def get_plan_style_selection(request: Request):
+    """Get the signed-in user's default approved style for new plans."""
+    selection = plan_style_store.get_selection(_uid(request))
+    if selection["style_id"] is None:
+        return {**selection, "name": None}
+    from engine.style_library import get_profile
+    try:
+        profile = get_profile(selection["style_id"], selection["version"])
+    except KeyError:
+        plan_style_store.set_selection(_uid(request), None, None)
+        return {"style_id": None, "version": None, "name": None}
+    return {**selection, "name": profile["name"]}
+
+
+@router.put("/plan-selection")
+def update_plan_style_selection(body: dict, request: Request):
+    """Set or clear the signed-in user's default approved style for new plans."""
+    style_id = body.get("style_id")
+    version = body.get("version")
+    if style_id is None and version is None:
+        selection = plan_style_store.set_selection(_uid(request), None, None)
+        return {"ok": True, **selection, "name": None}
+    if (not isinstance(style_id, str) or not re.fullmatch(r"[a-f0-9]{16}", style_id)
+            or not isinstance(version, int) or isinstance(version, bool) or version < 1):
+        raise HTTPException(422, "style_id and a positive version are required")
+    from engine.style_library import get_profile
+    try:
+        profile = get_profile(style_id, version)
+    except KeyError as exc:
+        raise HTTPException(404, "approved style version not found") from exc
+    selection = plan_style_store.set_selection(_uid(request), style_id, version)
+    return {"ok": True, **selection, "name": profile["name"]}
 
 
 @legacy_router.get("/style-library/evidence/{asset}")

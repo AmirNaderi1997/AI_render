@@ -117,6 +117,17 @@ class LearnedStyleProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class PlanStyleSelection(Base):
+    """A user's default approved visual style for newly generated plans."""
+
+    __tablename__ = "plan_style_selections"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    style_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class ContentRequestModel(Base):
     __tablename__ = "content_requests"
 

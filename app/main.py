@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from logging_config import configure_structured_logging
 from request_context import request_id_from_header, request_id_var
@@ -27,7 +28,7 @@ configure_structured_logging()
 
 from . import auth, jobs as jobstore
 from .auth_routes import router as auth_router
-from .database import DB_AVAILABLE, close_db, init_db
+from .database import DB_AVAILABLE, close_db, engine, init_db
 from .config import settings
 from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
 from .health import router as health_router
@@ -44,13 +45,24 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Production requires JWT_SECRET, DATABASE_URL, and REDIS_URL")
     if DB_AVAILABLE:
         # Schema ownership belongs to Alembic. Run it before serving so a new
-        # app process cannot receive requests against an old schema.
-        await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            check=True,
-            cwd=str(Path(__file__).resolve().parents[1]),
-        )
+        # app process cannot receive requests against an old schema. Gunicorn
+        # runs this lifespan in every worker, so serialize migration runners
+        # across workers and app replicas with a PostgreSQL advisory lock.
+        if engine is None:
+            raise RuntimeError("database engine is unavailable")
+        async with engine.connect() as migration_lock:
+            await migration_lock.execute(text("SELECT pg_advisory_lock(731904221)"))
+            await migration_lock.commit()
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [sys.executable, "-m", "alembic", "upgrade", "head"],
+                    check=True,
+                    cwd=str(Path(__file__).resolve().parents[1]),
+                )
+            finally:
+                await migration_lock.execute(text("SELECT pg_advisory_unlock(731904221)"))
+                await migration_lock.commit()
         await init_db(create_schema=False)
         log.info("Database connected and migrations are current")
     else:

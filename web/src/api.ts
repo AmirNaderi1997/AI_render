@@ -128,6 +128,7 @@ export interface FontLibrary { version: number; candidates: FontEntry[]; approve
 export interface StyleDraft { id: string; name: string; state: string; source: any; evidence: any[]; profile: any }
 export interface StyleProfile { style_id: string; version: number; name: string; state: string; source: any; profile: any; evidence: any[] }
 export interface StyleLibraryData { drafts: StyleDraft[]; profiles: StyleProfile[] }
+export interface PlanStyleSelection { style_id: string | null; version: number | null; name: string | null }
 
 export interface LibraryAsset {
   filename: string; category: "broll" | "music" | "sfx"; path: string;
@@ -413,6 +414,15 @@ export const api = {
   },
   async deleteStyleProfile(styleId: string, version: number): Promise<{ ok: boolean; style_id: string; version: number; state: string }> {
     return j(await authFetch(`${BASE}/style-library/profiles/${styleId}/versions/${version}`, { method: "DELETE" }));
+  },
+  async getPlanStyleSelection(): Promise<PlanStyleSelection> {
+    return j(await authFetch(`${BASE}/style/plan-selection`));
+  },
+  async setPlanStyleSelection(styleId: string | null, version: number | null): Promise<PlanStyleSelection & { ok: boolean }> {
+    return j(await authFetch(`${BASE}/style/plan-selection`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ style_id: styleId, version }),
+    }));
   },
   styleEvidenceUrl(asset: string): string { return `${BASE}/style-library/evidence/${encodeURIComponent(asset)}`; },
   async generateStatus(id: string, signal?: AbortSignal): Promise<GenerateStatus> {

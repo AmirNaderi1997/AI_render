@@ -22,6 +22,8 @@ export default function MyEffects() {
   const [rafiei, setRafiei] = React.useState<RafieiStyle | null>(null);
   const [styleLibrary, setStyleLibrary] = React.useState<StyleLibraryData>({ drafts: [], profiles: [] });
   const [selectingRafiei, setSelectingRafiei] = React.useState<string | null>(null);
+  const [planStyleSelection, setPlanStyleSelection] = React.useState<{ style_id: string | null; version: number | null; name: string | null } | null>(null);
+  const [selectingPlanStyle, setSelectingPlanStyle] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
   const [newRule, setNewRule] = React.useState("");
   const [loading, setLoading] = React.useState(true);
@@ -50,6 +52,7 @@ export default function MyEffects() {
       fetchMyEffects().then(setMyEffects),
       api.getRafieiStyles().then(setRafiei),
       api.getStyleLibrary().then(setStyleLibrary),
+      api.getPlanStyleSelection().then(setPlanStyleSelection),
     ]).catch(e => setError(friendlyError(e, "load your effects"))).finally(() => setLoading(false));
   }, []);
 
@@ -62,6 +65,16 @@ export default function MyEffects() {
       await reload();
     } catch (e) { setError(friendlyError(e, "update your effects")); }
     finally { setSelectingRafiei(null); }
+  }
+
+  async function handleSelectPlanStyle(styleId: string | null, version: number | null) {
+    const key = styleId ? `${styleId}@${version}` : "learned";
+    setSelectingPlanStyle(key); setError("");
+    try {
+      const saved = await track(() => api.setPlanStyleSelection(styleId, version));
+      setPlanStyleSelection(saved);
+    } catch (e) { setError(friendlyError(e, "save your default plan style")); }
+    finally { setSelectingPlanStyle(null); }
   }
 
   async function handleAddRule() {
@@ -180,6 +193,41 @@ export default function MyEffects() {
           })}
         </div>
       </section>}
+
+      <section style={{ marginBottom: 32 }}>
+        <div className="section-header">
+          <h2>Plan styles</h2>
+          <a href="/style-library" style={{ fontSize: 13 }}>Manage styles</a>
+        </div>
+        <p className="muted" style={{ marginBottom: 12 }}>
+          Choose the default style for new plans. Existing plans keep their selected version; you can change this default any time.
+          Choosing Learned profile uses your Style Learner profile when it is enabled.
+        </p>
+        <div className="rafiei-style-grid">
+          <button type="button" className={`rafiei-style-card${planStyleSelection?.style_id ? "" : " is-selected"}`}
+            aria-pressed={!planStyleSelection?.style_id} disabled={selectingPlanStyle !== null || !planStyleSelection?.style_id}
+            onClick={() => void handleSelectPlanStyle(null, null)}>
+            <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">Learned profile</span>
+              <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === "learned" ? "…" : !planStyleSelection?.style_id ? "✓" : ""}</span></span>
+            <span className="rafiei-style-card__description">Use the profile learned from your reference reels when it is active. Otherwise use Rafiei Reel defaults.</span>
+            <span className="rafiei-style-card__action">{!planStyleSelection?.style_id ? "Selected · Click an imported style to override" : "Select learned profile"}</span>
+          </button>
+          {styleLibrary.profiles.map(profile => {
+            const key = `${profile.style_id}@${profile.version}`;
+            const selected = planStyleSelection?.style_id === profile.style_id && planStyleSelection?.version === profile.version;
+            return <button type="button" key={key} className={`rafiei-style-card${selected ? " is-selected" : ""}`}
+              aria-pressed={selected} disabled={selectingPlanStyle !== null}
+              onClick={() => void handleSelectPlanStyle(profile.style_id, profile.version)}>
+              <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">{profile.name} · v{profile.version}</span>
+                <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === key ? "…" : selected ? "✓" : ""}</span></span>
+              <span className="rafiei-style-card__mood">{(profile.source?.type || "imported").replace(/_/g, " ")}</span>
+              <span className="rafiei-style-card__description">Apply this approved imported style to new plans. Existing jobs keep their current style.</span>
+              <span className="rafiei-style-card__action">{selected ? "Selected · Click to clear" : "Select this style"}</span>
+            </button>;
+          })}
+        </div>
+        {!loading && !styleLibrary.profiles.length && <p className="muted" style={{ marginTop: 10 }}>No approved styles yet. Import and approve one in <a href="/style-library">Styles &amp; Fonts Library</a>.</p>}
+      </section>
 
       <section style={{ marginBottom: 32 }}>
         <div className="section-header">
