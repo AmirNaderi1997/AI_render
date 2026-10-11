@@ -306,6 +306,9 @@ def _call_correction_llm(
             kwargs = {"max_tokens": 2048, "temperature": 0.0}
             if model:
                 kwargs["model"] = model
+            provider = _correction_provider()
+            if provider:
+                kwargs["provider"] = provider
             kwargs["timeout_seconds"] = _correction_timeout_seconds()
             raw, usage = chat_json(system, user, **kwargs)
             total_usage.input_tokens += usage.input_tokens
@@ -479,6 +482,12 @@ def _correction_model() -> Optional[str]:
     """Return CORRECTION_MODEL from env, or None to use the default LLM_MODEL."""
     import os
     return os.environ.get("CORRECTION_MODEL") or None
+
+
+def _correction_provider() -> Optional[str]:
+    """Use a provider dedicated to correction when configured."""
+    provider = os.environ.get("CORRECTION_PROVIDER", "").strip().lower()
+    return provider or None
 
 
 _CHUNK_SIZE = 200  # max words per LLM correction call

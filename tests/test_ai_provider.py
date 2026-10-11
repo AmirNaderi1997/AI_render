@@ -125,12 +125,13 @@ def test_jarvis_does_not_inherit_sarovi_text_model(monkeypatch):
 def test_default_llm_model_and_providers_read_settings(monkeypatch):
     monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.delenv("JARVIS_MODEL", raising=False)
+    monkeypatch.delenv("SAROVI_LLM_MODEL", raising=False)
     assert Settings(_env_file=None).LLM_MODEL == "CLAUDE_SONNET_5_5"
 
     monkeypatch.setattr(settings, "JARVIS_MODEL", "jarvis-model-from-settings")
-    monkeypatch.setattr(settings, "LLM_MODEL", "sarovi-model-from-settings")
+    monkeypatch.setattr(settings, "SAROVI_LLM_MODEL", "sarovi-model-from-settings")
     assert JarvisProvider().model == settings.JARVIS_MODEL
-    assert SaroviProvider().model == settings.LLM_MODEL
+    assert SaroviProvider().model == settings.SAROVI_LLM_MODEL
 
 
 def test_sarovi_connection_failure_falls_back_without_exposing_key(monkeypatch, caplog):

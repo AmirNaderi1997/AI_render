@@ -287,20 +287,28 @@ def test_latin_correction_via_llm():
 def test_correction_model_env_passed_to_llm():
     """CORRECTION_MODEL env var is forwarded to chat_json as model kwarg."""
     llm_resp = {"corrections": []}
-    with patch.dict("os.environ", {"CORRECTION_MODEL": "gpt-test-model"}):
+    with patch.dict("os.environ", {
+        "CORRECTION_MODEL": "gpt-test-model",
+        "CORRECTION_PROVIDER": "sarovi",
+    }):
         with patch("brain.correct.chat_json", return_value=(llm_resp, _mock_usage())) as mock_llm:
             auto_correct(TRANSCRIPT, PRESET_WITH_THRESHOLD, GLOSSARY)
     call_kwargs = mock_llm.call_args
     assert call_kwargs[1].get("model") == "gpt-test-model"
+    assert call_kwargs[1].get("provider") == "sarovi"
 
 
 def test_correction_model_default_when_unset():
     """Without CORRECTION_MODEL, chat_json is called without model kwarg."""
     llm_resp = {"corrections": []}
     with patch.dict("os.environ", {}, clear=False):
-        env = dict(**{k: v for k, v in __import__("os").environ.items() if k != "CORRECTION_MODEL"})
+        env = dict(**{
+            k: v for k, v in __import__("os").environ.items()
+            if k not in {"CORRECTION_MODEL", "CORRECTION_PROVIDER"}
+        })
         with patch.dict("os.environ", env, clear=True):
             with patch("brain.correct.chat_json", return_value=(llm_resp, _mock_usage())) as mock_llm:
                 auto_correct(TRANSCRIPT, PRESET_WITH_THRESHOLD, GLOSSARY)
     call_kwargs = mock_llm.call_args
     assert call_kwargs[1].get("model") is None
+    assert call_kwargs[1].get("provider") is None

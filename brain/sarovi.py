@@ -9,6 +9,25 @@ import urllib.request
 BASE_URL = "https://api.sarovi.ir/v1"
 
 
+def response_output_text(result: dict) -> str:
+    """Return text from either supported Responses API response shape."""
+    direct = result.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    parts: list[str] = []
+    for output in result.get("output") or []:
+        if not isinstance(output, dict):
+            continue
+        for content in output.get("content") or []:
+            if not isinstance(content, dict) or content.get("type") != "output_text":
+                continue
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
 def request(path: str, payload: dict, *, timeout: float = 300) -> dict:
     key = os.getenv("SAROVI_API_KEY", "").strip()
     if not key:

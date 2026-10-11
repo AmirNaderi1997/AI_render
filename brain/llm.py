@@ -90,8 +90,10 @@ def _provider() -> str:
     return settings.LLM_PROVIDER.lower()
 
 
-def _model() -> str:
-    return settings.LLM_MODEL
+def _model(provider: str | None = None) -> str:
+    if (provider or _provider()) == "sarovi":
+        return _getenv_ci("SAROVI_LLM_MODEL") or settings.SAROVI_LLM_MODEL
+    return _getenv_ci("LLM_MODEL") or settings.LLM_MODEL
 
 
 def _vision_provider() -> str:
@@ -133,14 +135,15 @@ def chat_json(
     max_tokens: int = 16000,
     temperature: float = 0.0,
     timeout_seconds: Optional[float] = None,
+    provider: Optional[str] = None,
 ) -> tuple[dict, LLMUsage]:
     """Send a single-turn request expecting a JSON response.
 
     Uses LLM_PROVIDER + LLM_MODEL (default: CLAUDE_SONNET_5_5).
     Returns (parsed_json, usage).
     """
-    provider = _provider()
-    model = model or _model()
+    provider = (provider or _provider()).lower()
+    model = model or _model(provider)
     t0 = time.monotonic()
 
     if provider == "anthropic":
@@ -175,7 +178,8 @@ def _sarovi_call(
         "input": user,
         "max_output_tokens": max(128, min(max_tokens, 32768)),
     }, timeout=_provider_timeout_seconds(timeout_seconds))
-    text = result.get("output_text", "")
+    from .sarovi import response_output_text
+    text = response_output_text(result)
     if not isinstance(text, str) or not text.strip():
         raise RuntimeError("Sarovi returned no text")
     reported = result.get("usage") or {}

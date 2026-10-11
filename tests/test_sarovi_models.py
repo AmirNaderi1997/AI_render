@@ -17,17 +17,33 @@ def test_sarovi_plan_request_uses_responses_contract(monkeypatch):
         return {"model": payload["model"], "output_text": '{"scenes": []}',
                 "usage": {"input_tokens": 3, "output_tokens": 4}}
 
-    monkeypatch.setenv("LLM_PROVIDER", "sarovi")
-    monkeypatch.setenv("LLM_MODEL", settings.LLM_MODEL)
+    monkeypatch.setattr(settings, "SAROVI_LLM_MODEL", "anthropic/test-model")
     monkeypatch.setattr("brain.sarovi.request", fake_request)
-    plan, usage = llm.chat_json("Return JSON", "Plan a reel", max_tokens=500)
+    plan, usage = llm.chat_json(
+        "Return JSON",
+        "Plan a reel",
+        max_tokens=500,
+        provider="sarovi",
+    )
     assert plan == {"scenes": []}
     assert usage.output_tokens == 4
     assert seen["path"] == "/responses"
     assert seen["payload"] == {
-        "model": settings.LLM_MODEL, "instructions": "Return JSON",
+        "model": "anthropic/test-model", "instructions": "Return JSON",
         "input": "Plan a reel", "max_output_tokens": 500,
     }
+
+
+def test_sarovi_response_reads_nested_responses_api_output():
+    from brain.sarovi import response_output_text
+
+    result = {
+        "output": [{
+            "type": "message",
+            "content": [{"type": "output_text", "text": '{"ok":true}'}],
+        }],
+    }
+    assert response_output_text(result) == '{"ok":true}'
 
 
 def test_sarovi_image_provider_saves_valid_image(monkeypatch, tmp_path):

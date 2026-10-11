@@ -374,7 +374,10 @@ class SaroviProvider(_ExternalProvider):
     def __init__(self) -> None:
         self.api_key = _config("SAROVI_API_KEY")
         self.api_url = _config("SAROVI_API_URL", default=_DEFAULT_SAROVI_URL) or _DEFAULT_SAROVI_URL
-        self.model = _config("LLM_MODEL") or settings.LLM_MODEL
+        self.model = _config(
+            "SAROVI_LLM_MODEL",
+            default=settings.SAROVI_LLM_MODEL,
+        ) or settings.SAROVI_LLM_MODEL
 
     def _responses_json(self, system: str, user: str) -> tuple[dict, LLMUsage]:
         started = time.monotonic()
@@ -389,7 +392,8 @@ class SaroviProvider(_ExternalProvider):
             self.api_key,
             _timeout_seconds(),
         )
-        text = result.get("output_text")
+        from .sarovi import response_output_text
+        text = response_output_text(result)
         if not isinstance(text, str) or not text.strip():
             raise RuntimeError("Sarovi returned no text")
         reported = result.get("usage") or {}
