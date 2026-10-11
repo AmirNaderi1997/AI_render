@@ -50,7 +50,9 @@ services:
     volumes:
       - job_data:/app/job_data
       - ./assets:/app/assets:ro
-      - ./presets:/app/presets:ro
+      # The My Effects API persists rules, favorites, and the selected Rafiei
+      # style in presets/my_effects.yaml. Keep this mount writable for the API.
+      - ./presets:/app/presets
       - ./samples:/app/samples:ro
     depends_on:
       db:
