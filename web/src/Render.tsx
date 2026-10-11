@@ -466,6 +466,20 @@ export default function Render() {
             <span className="muted">{s.output}</span>
           </div>
           <AuthenticatedMedia as="video" src={api.exportUrl(id, s.output)} controls />
+          {plan?.poster?.text && (
+            <div style={{ marginTop: 16 }}>
+              <div className="section-header">
+                <h3 style={{ margin: 0 }}>Poster Preview</h3>
+                <span className="muted">{plan.poster.text}</span>
+              </div>
+              <AuthenticatedMedia
+                as="img"
+                src={api.exportUrl(id, s.output.replace(/\.mp4$/i, "_poster.jpg"))}
+                alt={`Poster preview: ${plan.poster.text}`}
+                style={{ display: "block", width: "100%", maxWidth: 360, margin: "0 auto", borderRadius: "var(--radius-sm)" }}
+              />
+            </div>
+          )}
           <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
             <button disabled={downloadBusy} title={(downloadBusy) ? "Wait for the current download to finish." : undefined} onClick={() => void download(api.exportUrl(id, s.output), s.output)}>{downloadBusy ? "Downloading…" : "Download"}</button>
             {plan?.content_type === "post" && (

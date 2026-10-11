@@ -1,4 +1,17 @@
 {
   "version": 1,
-  "assets": []
+  "assets": [
+    {
+      "filename": "YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9XiY4HjXknY_006_128k.m4a",
+      "category": "sfx",
+      "path": "assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9XiY4HjXknY_006_128k.m4a",
+      "tags": [
+        "test"
+      ],
+      "mood": null,
+      "energy": null,
+      "duration_sec": 178.79,
+      "description": null
+    }
+  ]
 }

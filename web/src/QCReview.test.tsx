@@ -45,4 +45,25 @@ describe("QCReview polling", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
     expect(status.mock.calls.length).toBeGreaterThan(afterRerunCalls);
   });
+
+  it("waits for re-render invalidation before loading QC status again", async () => {
+    const oldResult = {
+      ...qc("done"), total_issues: 1,
+      issues: [{ timestamp: 1, severity: "warning", type: "caption", description: "Old problem" }],
+    };
+    let renderQueued = false;
+    const status = vi.spyOn(api, "qcStatus").mockImplementation(async () => renderQueued ? qc("idle") : oldResult);
+    vi.spyOn(api, "applyQCFixes").mockResolvedValue({ ok: true, changes: [{ field: "captions" }], plan: {} });
+    const onRerender = vi.fn(async () => { renderQueued = true; });
+
+    render(<QCReview jobId="j1" renderDone latestOutput="v1_preview.mp4" onRerender={onRerender} />);
+    expect(await screen.findByText("Old problem")).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Apply fix for issue/ })); });
+
+    expect(onRerender).toHaveBeenCalledOnce();
+    expect(status.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText("Old problem")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run QC Check" })).toBeInTheDocument();
+  });
 });

@@ -8,7 +8,7 @@ interface QCReviewProps {
   jobId: string;
   renderDone: boolean;
   latestOutput?: string;
-  onRerender?: () => void;
+  onRerender?: () => void | Promise<void>;
 }
 
 type QCStatus = {
@@ -71,10 +71,14 @@ export default function QCReview({ jobId, renderDone, latestOutput, onRerender }
     try {
       const result = await api.applyQCFixes(jobId, indices);
       if (onRerender && result.changes?.length > 0) {
-        setQC(null);  // clear stale QC display
-        onRerender();
+        // Wait until the render endpoint has invalidated the previous QC state
+        // before polling again. Otherwise this request can reload the old issues
+        // in the small gap between applying the plan patch and queuing the render.
+        await onRerender();
+        setQC(null);
+        setIgnored(new Set());
       }
-      poll();
+      await poll();
     } catch (e: any) {
       setError(friendlyError(e, "apply quality fixes"));
     }

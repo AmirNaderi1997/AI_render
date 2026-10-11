@@ -1,12 +1,12 @@
 import React from "react";
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Render from "./Render";
 import { api } from "./api";
 
 vi.mock("./PremiereCard", () => ({ PremiereCard: () => null }));
-vi.mock("./AuthenticatedMedia", () => ({ AuthenticatedMedia: () => null }));
+vi.mock("./AuthenticatedMedia", () => ({ AuthenticatedMedia: ({ as, ...props }: any) => React.createElement(as, props) }));
 vi.mock("./QCReview", () => ({ default: () => null }));
 vi.mock("./ui", () => ({
   Breadcrumbs: () => null, JobWorkflow: () => null, LoadingState: () => <div>Loading</div>,
@@ -62,5 +62,22 @@ describe("Render polling", () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(denoiseStatus).toHaveBeenCalledTimes(settledCalls);
+  });
+
+  it("shows the rendered poster and its selected sentence beside the video preview", async () => {
+    vi.spyOn(api, "renderStatus").mockResolvedValue({
+      ...renderResponse("done"), output: "v2_preview.mp4",
+    });
+    vi.spyOn(api, "getJob").mockResolvedValue({
+      id: "j1", raw_name: "Job", plan: { poster: { text: "The selected hook" } },
+    } as any);
+    vi.spyOn(api, "getDenoiseStatus").mockResolvedValue(denoiseResponse("idle"));
+    vi.spyOn(api, "getMusicStatus").mockResolvedValue(musicResponse);
+
+    mountRender();
+
+    const poster = await screen.findByRole("img", { name: "Poster preview: The selected hook" });
+    expect(poster).toHaveAttribute("src", expect.stringContaining("v2_preview_poster.jpg"));
+    expect(screen.getByText("The selected hook")).toBeInTheDocument();
   });
 });
