@@ -104,15 +104,30 @@ def delete_style_profile(style_id: str, version: int):
 def get_plan_style_selection(request: Request):
     """Get the signed-in user's default approved style for new plans."""
     selection = plan_style_store.get_selection(_uid(request))
+    hidden = plan_style_store.get_default_hidden(_uid(request))
     if selection["style_id"] is None:
-        return {**selection, "name": None}
+        return {**selection, "name": None, "default_hidden": hidden}
     from engine.style_library import get_profile
     try:
         profile = get_profile(selection["style_id"], selection["version"])
     except KeyError:
         selection = plan_style_store.clear_selection(_uid(request))
-        return {**selection, "name": None}
-    return {**selection, "name": profile["name"]}
+        return {**selection, "name": None, "default_hidden": hidden}
+    return {**selection, "name": profile["name"], "default_hidden": hidden}
+
+
+@router.put("/plan-default-visibility")
+def update_plan_default_visibility(body: dict, request: Request):
+    hidden = body.get("hidden")
+    if not isinstance(hidden, bool):
+        raise HTTPException(422, "hidden must be a boolean")
+    uid = _uid(request)
+    plan_style_store.set_default_hidden(uid, hidden)
+    if hidden:
+        selection = plan_style_store.get_selection(uid)
+        if selection["style_id"] is None:
+            plan_style_store.clear_selection(uid)
+    return {"ok": True, "default_hidden": hidden}
 
 
 @router.put("/plan-selection")
@@ -123,7 +138,7 @@ def update_plan_style_selection(body: dict, request: Request):
     if style_id is None and version is None:
         selection = (plan_style_store.clear_selection(_uid(request)) if body.get("selected") is False
                      else plan_style_store.set_selection(_uid(request), None, None))
-        return {"ok": True, **selection, "name": None}
+        return {"ok": True, **selection, "name": None, "default_hidden": plan_style_store.get_default_hidden(_uid(request))}
     if (not isinstance(style_id, str) or not re.fullmatch(r"[a-f0-9]{16}", style_id)
             or not isinstance(version, int) or isinstance(version, bool) or version < 1):
         raise HTTPException(422, "style_id and a positive version are required")
@@ -133,7 +148,7 @@ def update_plan_style_selection(body: dict, request: Request):
     except KeyError as exc:
         raise HTTPException(404, "approved style version not found") from exc
     selection = plan_style_store.set_selection(_uid(request), style_id, version)
-    return {"ok": True, **selection, "name": profile["name"]}
+    return {"ok": True, **selection, "name": profile["name"], "default_hidden": plan_style_store.get_default_hidden(_uid(request))}
 
 
 @legacy_router.get("/style-library/evidence/{asset}")

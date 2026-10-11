@@ -10,3 +10,7 @@ def test_explicit_defaults_can_be_deselected(tmp_path, monkeypatch):
     assert plan_style_store.get_selection(42)["selected"] is True
     assert plan_style_store.clear_selection(42)["selected"] is False
     assert plan_style_store.get_selection(42)["selected"] is False
+    assert plan_style_store.get_default_hidden(42) is False
+    assert plan_style_store.set_default_hidden(42, True) is True
+    assert plan_style_store.get_default_hidden(42) is True
+    assert plan_style_store.get_selection(42)["selected"] is False

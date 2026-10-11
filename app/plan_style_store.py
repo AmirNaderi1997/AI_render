@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from app.database import AsyncSessionLocal, DB_AVAILABLE
-from app.models import PlanStyleSelection
+from app.models import PlanStyleSelection, PlanStyleVisibility
 from brain.style_profile import LEARNED_PROFILES_DIR
 
 _SAFE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -92,6 +92,41 @@ def clear_selection(user_id) -> dict:
     else:
         _path(uid).unlink(missing_ok=True)
     return {"style_id": None, "version": None, "selected": False}
+
+
+def get_default_hidden(user_id) -> bool:
+    uid = _uid(user_id)
+    if DB_AVAILABLE:
+        async def query():
+            async with AsyncSessionLocal() as db:
+                row = (await db.execute(select(PlanStyleVisibility).where(
+                    PlanStyleVisibility.user_id == int(uid)))).scalar_one_or_none()
+                return bool(row and row.default_hidden)
+        return _run(query())
+    path = _SELECTIONS / f"{uid}-visibility.json"
+    return bool(json.loads(path.read_text(encoding="utf-8")).get("default_hidden")) if path.is_file() else False
+
+
+def set_default_hidden(user_id, hidden: bool) -> bool:
+    uid = _uid(user_id)
+    if DB_AVAILABLE:
+        async def upsert():
+            async with AsyncSessionLocal() as db:
+                row = (await db.execute(select(PlanStyleVisibility).where(
+                    PlanStyleVisibility.user_id == int(uid)))).scalar_one_or_none()
+                if row is None:
+                    db.add(PlanStyleVisibility(user_id=int(uid), default_hidden=hidden))
+                else:
+                    row.default_hidden = hidden
+                await db.commit()
+        _run(upsert())
+    else:
+        path = _SELECTIONS / f"{uid}-visibility.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"default_hidden": hidden}), encoding="utf-8")
+        temporary.replace(path)
+    return hidden
 
 
 def clear_removed_style(style_id: str, version: int) -> None:

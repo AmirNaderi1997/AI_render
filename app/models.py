@@ -128,6 +128,14 @@ class PlanStyleSelection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class PlanStyleVisibility(Base):
+    """User choice to hide the built-in defaults card, not the render preset."""
+
+    __tablename__ = "plan_style_visibility"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    default_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
 class ContentRequestModel(Base):
     __tablename__ = "content_requests"
 

@@ -21,11 +21,12 @@ describe("My Effects plan styles", () => {
     vi.spyOn(api, "getMyEffects").mockResolvedValue({ favorites: {}, rules: [], dislikes: [], selected_rafiei_style: null } as any);
     vi.spyOn(api, "getRafieiStyles").mockResolvedValue({ preferred_effects: [] } as any);
     vi.spyOn(api, "getStyleLibrary").mockResolvedValue({ drafts: [], profiles: [] });
-    vi.spyOn(api, "getPlanStyleSelection").mockResolvedValue({ style_id: null, version: null, name: null, selected: false });
+    vi.spyOn(api, "getPlanStyleSelection").mockResolvedValue({ style_id: null, version: null, name: null, selected: false, default_hidden: false });
     vi.spyOn(api, "getLearnedProfile").mockResolvedValue(activeLearned);
     vi.spyOn(api, "updateLearnedProfile").mockResolvedValue({ ok: true });
-    vi.spyOn(api, "setPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: true });
-    vi.spyOn(api, "clearPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: false });
+    vi.spyOn(api, "setPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: true, default_hidden: false });
+    vi.spyOn(api, "clearPlanStyleSelection").mockResolvedValue({ ok: true, style_id: null, version: null, name: null, selected: false, default_hidden: false });
+    vi.spyOn(api, "setPlanDefaultVisibility").mockResolvedValue({ ok: true, default_hidden: true });
     vi.spyOn(api, "resetLearnedProfile").mockResolvedValue({ ok: true });
   });
 
@@ -38,7 +39,7 @@ describe("My Effects plan styles", () => {
     fireEvent.click(learned);
 
     await waitFor(() => expect(api.updateLearnedProfile).toHaveBeenCalledWith({ enabled: false }));
-    expect(await screen.findByRole("button", { name: /Rafiei Reel defaults/ })).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: /^Rafiei Reel defaults/ })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("deletes the learned profile while retaining the explicit default choice", async () => {
@@ -58,9 +59,9 @@ describe("My Effects plan styles", () => {
 
   it("deselects the built-in defaults card without reselecting it", async () => {
     vi.mocked(api.getLearnedProfile).mockResolvedValue({ ...activeLearned, enabled: false });
-    vi.mocked(api.getPlanStyleSelection).mockResolvedValue({ style_id: null, version: null, name: null, selected: true });
+    vi.mocked(api.getPlanStyleSelection).mockResolvedValue({ style_id: null, version: null, name: null, selected: true, default_hidden: false });
     render(<MyEffects />);
-    const defaults = await screen.findByRole("button", { name: /Rafiei Reel defaults/ });
+    const defaults = await screen.findByRole("button", { name: /^Rafiei Reel defaults/ });
     expect(defaults).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(defaults);
     await waitFor(() => expect(api.clearPlanStyleSelection).toHaveBeenCalledTimes(1));
@@ -75,5 +76,18 @@ describe("My Effects plan styles", () => {
     render(<MyEffects />);
     expect(await screen.findByRole("button", { name: "Delete learned profile" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Learned profile/ })).toBeDisabled();
+  });
+
+  it("deletes the built-in card from My Effects and offers restoration", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<MyEffects />);
+    await screen.findByRole("button", { name: /^Rafiei Reel defaults/ });
+    vi.mocked(api.getPlanStyleSelection).mockResolvedValue({
+      style_id: null, version: null, name: null, selected: false, default_hidden: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Delete Rafiei Reel defaults from My Effects" }));
+    await waitFor(() => expect(api.setPlanDefaultVisibility).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Rafiei Reel defaults/ })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Restore card" })).toBeInTheDocument();
   });
 });

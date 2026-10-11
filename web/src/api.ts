@@ -128,7 +128,7 @@ export interface FontLibrary { version: number; candidates: FontEntry[]; approve
 export interface StyleDraft { id: string; name: string; state: string; source: any; evidence: any[]; profile: any }
 export interface StyleProfile { style_id: string; version: number; name: string; state: string; source: any; profile: any; evidence: any[] }
 export interface StyleLibraryData { drafts: StyleDraft[]; profiles: StyleProfile[] }
-export interface PlanStyleSelection { style_id: string | null; version: number | null; name: string | null; selected: boolean }
+export interface PlanStyleSelection { style_id: string | null; version: number | null; name: string | null; selected: boolean; default_hidden: boolean }
 export interface LearnedStyleProfile {
   exists: boolean; active: boolean; enabled: boolean; sample_count: number;
   metrics: Record<string, unknown>; confidence: Record<string, unknown>;
@@ -433,6 +433,12 @@ export const api = {
     return j(await authFetch(`${BASE}/style/plan-selection`, {
       method: "PUT", headers: { "content-type": "application/json" },
       body: JSON.stringify({ style_id: null, version: null, selected: false }),
+    }));
+  },
+  async setPlanDefaultVisibility(hidden: boolean): Promise<{ ok: boolean; default_hidden: boolean }> {
+    return j(await authFetch(`${BASE}/style/plan-default-visibility`, {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hidden }),
     }));
   },
   styleEvidenceUrl(asset: string): string { return `${BASE}/style-library/evidence/${encodeURIComponent(asset)}`; },

@@ -93,6 +93,25 @@ export default function MyEffects() {
     finally { setSelectingPlanStyle(null); }
   }
 
+  async function handleDeletePlanDefaults() {
+    if (!window.confirm("Hide Rafiei Reel defaults from My Effects? The built-in rendering preset will remain available. You can restore this card later.")) return;
+    setSelectingPlanStyle("default-delete"); setError("");
+    try {
+      await track(() => api.setPlanDefaultVisibility(true));
+      setPlanStyleSelection(await api.getPlanStyleSelection());
+    } catch (e) { setError(friendlyError(e, "hide the default plan style")); }
+    finally { setSelectingPlanStyle(null); }
+  }
+
+  async function handleRestorePlanDefaults() {
+    setSelectingPlanStyle("default-restore"); setError("");
+    try {
+      await track(() => api.setPlanDefaultVisibility(false));
+      setPlanStyleSelection(await api.getPlanStyleSelection());
+    } catch (e) { setError(friendlyError(e, "restore the default plan style")); }
+    finally { setSelectingPlanStyle(null); }
+  }
+
   async function handleToggleLearnedProfile() {
     if (!learnedProfile?.active) return;
     setSelectingPlanStyle("learned"); setError("");
@@ -262,6 +281,7 @@ export default function MyEffects() {
           Choosing Learned profile uses your Style Learner profile when it is enabled.
         </p>
         <div className="rafiei-style-grid">
+          {!planStyleSelection?.default_hidden && <div className="plan-style-card-wrap">
           <button type="button" className={`rafiei-style-card${defaultsSelected ? " is-selected" : ""}`}
             aria-pressed={defaultsSelected} disabled={selectingPlanStyle !== null || pendingActions > 0}
             onClick={() => void handleUsePlanDefaults()}>
@@ -270,6 +290,12 @@ export default function MyEffects() {
             <span className="rafiei-style-card__description">Use the built-in Rafiei Reel plan style without a learned or imported override.</span>
             <span className="rafiei-style-card__action">{defaultsSelected ? "Selected · Click to deselect" : "Select defaults"}</span>
           </button>
+          <button type="button" className="danger-sm plan-style-card__delete"
+            disabled={selectingPlanStyle !== null || pendingActions > 0}
+            onClick={() => void handleDeletePlanDefaults()}
+            aria-label="Delete Rafiei Reel defaults from My Effects"
+            title="Hide this card; the built-in rendering preset remains available">Delete</button>
+          </div>}
           <div className="plan-style-card-wrap">
             <button type="button" className={`rafiei-style-card${learnedSelected ? " is-selected" : ""}`}
               aria-pressed={learnedSelected} disabled={selectingPlanStyle !== null || pendingActions > 0 || !learnedProfile?.active}
@@ -309,6 +335,11 @@ export default function MyEffects() {
             </div>;
           })}
         </div>
+        {planStyleSelection?.default_hidden && <p className="muted" style={{ marginTop: 10 }}>
+          Rafiei Reel defaults is hidden from My Effects. <button type="button" className="link-button"
+            disabled={selectingPlanStyle !== null || pendingActions > 0}
+            onClick={() => void handleRestorePlanDefaults()}>Restore card</button>
+        </p>}
         {!loading && !styleLibrary.profiles.length && <p className="muted" style={{ marginTop: 10 }}>No approved styles yet. Import and approve one in <a href="/style-library">Styles &amp; Fonts Library</a>.</p>}
       </section>
 
