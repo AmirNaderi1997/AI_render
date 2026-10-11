@@ -89,6 +89,18 @@ def _generate_elevenlabs(
         Path(output_path).write_bytes(response.content)
     except Exception as exc:
         Path(output_path).unlink(missing_ok=True)
+        response = getattr(exc, "response", None)
+        if getattr(response, "status_code", None) == 402:
+            try:
+                detail = response.json().get("detail", {})
+            except Exception:
+                detail = {}
+            if isinstance(detail, dict) and detail.get("code") == "paid_plan_required":
+                raise RuntimeError(
+                    "This Persian ElevenLabs voice requires a paid plan for API use. "
+                    "Choose an API-enabled Persian voice or switch narration provider."
+                ) from exc
+            raise RuntimeError("ElevenLabs request failed (HTTP 402)") from exc
         raise RuntimeError(f"ElevenLabs request failed ({type(exc).__name__})") from exc
 
 
@@ -137,6 +149,8 @@ def generate_narration(
         except Exception as exc:
             # ElevenLabs is commonly inaccessible in Iran. Edge remains a
             # no-key fallback even when ElevenLabs is explicitly requested.
+            if "requires a paid plan for API use" in str(exc):
+                raise
             log.warning("ElevenLabs narration failed (%s); falling back to edge-tts", exc)
             out_file.unlink(missing_ok=True)
             provider = "edge-tts"
