@@ -78,6 +78,17 @@ def _default_narration_voice(language: str) -> str:
     return os.environ.get("CONTENT_TTS_VOICE_EN", "en-US-GuyNeural").strip() or "en-US-GuyNeural"
 
 
+def _default_elevenlabs_voice(language: str) -> str:
+    """Prefer an account voice trained in the requested narration language."""
+    normalized = language.lower().strip()
+    if normalized in {"fa", "per", "fas", "persian", "farsi"}:
+        return os.environ.get("CONTENT_TTS_ELEVENLABS_VOICE_FA", "").strip()
+    return os.environ.get(
+        "CONTENT_TTS_ELEVENLABS_VOICE_EN",
+        os.environ.get("ELEVENLABS_VOICE_ID", settings.ELEVENLABS_VOICE_ID),
+    ).strip()
+
+
 def create_content(
     prompt: str,
     content_type: str,
@@ -310,8 +321,9 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
             voice_settings = f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
         elif voice_provider == "elevenlabs":
             # The voice ID is safe checkpoint metadata; never persist the key.
-            voice_settings = os.environ.get(
-                "ELEVENLABS_VOICE_ID", settings.ELEVENLABS_VOICE_ID
+            voice_settings = (
+                f"fa={_default_elevenlabs_voice('fa')}:"
+                f"en={_default_elevenlabs_voice('en')}"
             )
         elif voice_provider in ("edge", "edge-tts"):
             voice_settings = (
@@ -355,6 +367,23 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                     voice if voice and voice != "default"
                                     else _default_narration_voice(storyboard.language)
                                 )
+                            elif voice_provider == "elevenlabs":
+                                voice_kwargs["voice_id"] = (
+                                    voice if voice and voice != "default"
+                                    else _default_elevenlabs_voice(storyboard.language)
+                                )
+                                if not voice_kwargs["voice_id"]:
+                                    if storyboard.language.lower().strip() in {
+                                        "fa", "per", "fas", "persian", "farsi",
+                                    }:
+                                        raise ValueError(
+                                            "Set CONTENT_TTS_ELEVENLABS_VOICE_FA to a "
+                                            "Persian-native ElevenLabs voice ID for Persian content."
+                                        )
+                                    raise ValueError(
+                                        "Set ELEVENLABS_VOICE_ID or "
+                                        "CONTENT_TTS_ELEVENLABS_VOICE_EN for English content."
+                                    )
                             tts_result = generate_narration(
                                 scene.narration_text,
                                 gen_dir,

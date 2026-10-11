@@ -66,10 +66,15 @@ def _edge_voice(voice_id: str) -> str:
     return voice_id or os.environ.get("TTS_VOICE") or os.environ.get("TTS_VOICE_ID") or _DEFAULT_EDGE_VOICE
 
 
-def _generate_elevenlabs(text: str, output_path: str) -> None:
+def _generate_elevenlabs(
+    text: str, output_path: str, voice_id: str = "", model_id: str = "",
+) -> None:
     """Generate one MP3 through ElevenLabs with a bounded network timeout."""
     api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
-    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
+    voice_id = voice_id.strip() or os.environ.get("ELEVENLABS_VOICE_ID", "").strip()
+    model_id = model_id.strip() or os.environ.get(
+        "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"
+    ).strip()
     if not api_key or not voice_id:
         raise RuntimeError("ElevenLabs is not configured with API key and voice ID")
     try:
@@ -77,7 +82,7 @@ def _generate_elevenlabs(text: str, output_path: str) -> None:
         response = httpx.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
             headers={"xi-api-key": api_key, "accept": "audio/mpeg"},
-            json={"text": text, "model_id": "eleven_multilingual_v2"},
+            json={"text": text, "model_id": model_id},
             timeout=_ELEVENLABS_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -104,7 +109,7 @@ def generate_narration(
         log.info("narration skipped because TTS_PROVIDER=disabled")
         return TTSResult(file_path="", duration_s=0.0, cost_usd=0.0)
 
-    voice = _edge_voice(voice_id)
+    edge_voice = _edge_voice(voice_id if provider == "edge-tts" else "")
     rate = os.environ.get("TTS_RATE", rate)
 
     output_dir = Path(output_dir)
@@ -112,7 +117,7 @@ def generate_narration(
     out_file = output_dir / f"narration_{uuid.uuid4().hex[:12]}.mp3"
 
     async def generate_with_timeout() -> None:
-        await asyncio.wait_for(_generate_async(text, str(out_file), voice, rate), timeout=60)
+        await asyncio.wait_for(_generate_async(text, str(out_file), edge_voice, rate), timeout=60)
 
     def run_once() -> None:
         try:
@@ -128,7 +133,7 @@ def generate_narration(
     if provider == "elevenlabs":
         try:
             log.info("generating narration with ElevenLabs (10s timeout)")
-            _generate_elevenlabs(text, str(out_file))
+            _generate_elevenlabs(text, str(out_file), voice_id=voice_id, model_id=model_id)
         except Exception as exc:
             # ElevenLabs is commonly inaccessible in Iran. Edge remains a
             # no-key fallback even when ElevenLabs is explicitly requested.
