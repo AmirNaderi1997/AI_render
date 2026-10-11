@@ -129,6 +129,11 @@ export interface StyleDraft { id: string; name: string; state: string; source: a
 export interface StyleProfile { style_id: string; version: number; name: string; state: string; source: any; profile: any; evidence: any[] }
 export interface StyleLibraryData { drafts: StyleDraft[]; profiles: StyleProfile[] }
 export interface PlanStyleSelection { style_id: string | null; version: number | null; name: string | null }
+export interface LearnedStyleProfile {
+  active: boolean; enabled: boolean; sample_count: number;
+  metrics: Record<string, unknown>; confidence: Record<string, unknown>;
+  preset_overrides: Record<string, unknown>;
+}
 
 export interface LibraryAsset {
   filename: string; category: "broll" | "music" | "sfx"; path: string;
@@ -687,7 +692,7 @@ export const api = {
     const fd = new FormData(); fd.append("file", file);
     return uploadWithProgress(`${BASE}/style/analyze`, fd, onProgress);
   },
-  async getLearnedProfile(): Promise<any> {
+  async getLearnedProfile(): Promise<LearnedStyleProfile> {
     return j(await authFetch(`${BASE}/style/profile`));
   },
   async updateLearnedProfile(body: any): Promise<{ ok: boolean }> {

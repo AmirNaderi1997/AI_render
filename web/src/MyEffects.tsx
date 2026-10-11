@@ -1,5 +1,5 @@
 import React from "react";
-import { api, type EffectPreset, type RafieiStyle, type StyleLibraryData } from "./api";
+import { api, type EffectPreset, type LearnedStyleProfile, type RafieiStyle, type StyleLibraryData } from "./api";
 import { LoadingState, friendlyError } from "./ui";
 
 const ENERGY_COLORS: Record<number, string> = {
@@ -21,6 +21,7 @@ export default function MyEffects() {
   const [myEffects, setMyEffects] = React.useState<any>(null);
   const [rafiei, setRafiei] = React.useState<RafieiStyle | null>(null);
   const [styleLibrary, setStyleLibrary] = React.useState<StyleLibraryData>({ drafts: [], profiles: [] });
+  const [learnedProfile, setLearnedProfile] = React.useState<LearnedStyleProfile | null>(null);
   const [selectingRafiei, setSelectingRafiei] = React.useState<string | null>(null);
   const [planStyleSelection, setPlanStyleSelection] = React.useState<{ style_id: string | null; version: number | null; name: string | null } | null>(null);
   const [selectingPlanStyle, setSelectingPlanStyle] = React.useState<string | null>(null);
@@ -53,6 +54,7 @@ export default function MyEffects() {
       api.getRafieiStyles().then(setRafiei),
       api.getStyleLibrary().then(setStyleLibrary),
       api.getPlanStyleSelection().then(setPlanStyleSelection),
+      api.getLearnedProfile().then(setLearnedProfile),
     ]).catch(e => setError(friendlyError(e, "load your effects"))).finally(() => setLoading(false));
   }, []);
 
@@ -74,6 +76,51 @@ export default function MyEffects() {
       const saved = await track(() => api.setPlanStyleSelection(styleId, version));
       setPlanStyleSelection(saved);
     } catch (e) { setError(friendlyError(e, "save your default plan style")); }
+    finally { setSelectingPlanStyle(null); }
+  }
+
+  async function handleUsePlanDefaults() {
+    setSelectingPlanStyle("default"); setError("");
+    try {
+      if (learnedProfile?.enabled) await track(() => api.updateLearnedProfile({ enabled: false }));
+      const [selection, profile] = await Promise.all([
+        track(() => api.setPlanStyleSelection(null, null)),
+        api.getLearnedProfile(),
+      ]);
+      setPlanStyleSelection(selection);
+      setLearnedProfile(profile);
+    } catch (e) { setError(friendlyError(e, "use the default plan style")); }
+    finally { setSelectingPlanStyle(null); }
+  }
+
+  async function handleToggleLearnedProfile() {
+    if (!learnedProfile?.active) return;
+    setSelectingPlanStyle("learned"); setError("");
+    try {
+      const enable = !(planStyleSelection?.style_id === null && learnedProfile.enabled);
+      await track(() => api.updateLearnedProfile({ enabled: enable }));
+      const [selection, profile] = await Promise.all([
+        enable ? track(() => api.setPlanStyleSelection(null, null)) : Promise.resolve(planStyleSelection),
+        api.getLearnedProfile(),
+      ]);
+      if (selection) setPlanStyleSelection(selection);
+      setLearnedProfile(profile);
+    } catch (e) { setError(friendlyError(e, "update the learned plan style")); }
+    finally { setSelectingPlanStyle(null); }
+  }
+
+  async function handleDeleteLearnedProfile() {
+    if (!window.confirm("Delete the learned profile? Reference reels will be kept so you can rebuild it later.")) return;
+    setSelectingPlanStyle("learned-delete"); setError("");
+    try {
+      await track(() => api.resetLearnedProfile());
+      const [selection, profile] = await Promise.all([
+        api.setPlanStyleSelection(null, null),
+        api.getLearnedProfile(),
+      ]);
+      setPlanStyleSelection(selection);
+      setLearnedProfile(profile);
+    } catch (e) { setError(friendlyError(e, "delete the learned profile")); }
     finally { setSelectingPlanStyle(null); }
   }
 
@@ -160,6 +207,11 @@ export default function MyEffects() {
   if (!myEffects) return <div className="errors" role="alert">{error || "We could not load your effects."} <button className="secondary" onClick={() => window.location.reload()}>Try again</button></div>;
 
   const selectedRafieiStyle = myEffects.selected_rafiei_style as string | null;
+  const learnedSelected = Boolean(!planStyleSelection?.style_id && learnedProfile?.active && learnedProfile?.enabled);
+  const defaultsSelected = Boolean(!planStyleSelection?.style_id && !learnedSelected);
+  const learnedProfileExists = Boolean(
+    learnedProfile && (Object.keys(learnedProfile.metrics || {}).length || Object.keys(learnedProfile.preset_overrides || {}).length),
+  );
   return (
     <div>
       <h1>My Effects</h1>
@@ -212,14 +264,29 @@ export default function MyEffects() {
           Choosing Learned profile uses your Style Learner profile when it is enabled.
         </p>
         <div className="rafiei-style-grid">
-          <button type="button" className={`rafiei-style-card${planStyleSelection?.style_id ? "" : " is-selected"}`}
-            aria-pressed={!planStyleSelection?.style_id} disabled={selectingPlanStyle !== null || !planStyleSelection?.style_id}
-            onClick={() => void handleSelectPlanStyle(null, null)}>
-            <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">Learned profile</span>
-              <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === "learned" ? "…" : !planStyleSelection?.style_id ? "✓" : ""}</span></span>
-            <span className="rafiei-style-card__description">Use the profile learned from your reference reels when it is active. Otherwise use Rafiei Reel defaults.</span>
-            <span className="rafiei-style-card__action">{!planStyleSelection?.style_id ? "Selected · Click an imported style to override" : "Select learned profile"}</span>
+          <button type="button" className={`rafiei-style-card${defaultsSelected ? " is-selected" : ""}`}
+            aria-pressed={defaultsSelected} disabled={selectingPlanStyle !== null || pendingActions > 0}
+            onClick={() => void handleUsePlanDefaults()}>
+            <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">Rafiei Reel defaults</span>
+              <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === "default" ? "…" : defaultsSelected ? "✓" : ""}</span></span>
+            <span className="rafiei-style-card__description">Use the built-in Rafiei Reel plan style without a learned or imported override.</span>
+            <span className="rafiei-style-card__action">{defaultsSelected ? "Selected" : "Use defaults"}</span>
           </button>
+          {learnedProfileExists && <div className="plan-style-card-wrap">
+            <button type="button" className={`rafiei-style-card${learnedSelected ? " is-selected" : ""}`}
+              aria-pressed={learnedSelected} disabled={selectingPlanStyle !== null || pendingActions > 0 || !learnedProfile?.active}
+              onClick={() => void handleToggleLearnedProfile()}>
+              <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">Learned profile</span>
+                <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === "learned" ? "…" : learnedSelected ? "✓" : ""}</span></span>
+              <span className="rafiei-style-card__description">Use the profile learned from your reference reels for new plans.</span>
+              <span className="rafiei-style-card__action">{!learnedProfile?.active ? "Needs at least 3 reference reels" : learnedSelected ? "Selected · Click to deselect" : "Select learned profile"}</span>
+            </button>
+            <button type="button" className="danger-sm plan-style-card__delete"
+              disabled={selectingPlanStyle !== null || pendingActions > 0}
+              onClick={() => void handleDeleteLearnedProfile()}
+              aria-label="Delete learned profile"
+              title="Delete the learned profile; reference reels are kept">Delete</button>
+          </div>}
           {styleLibrary.profiles.map(profile => {
             const key = `${profile.style_id}@${profile.version}`;
             const selected = planStyleSelection?.style_id === profile.style_id && planStyleSelection?.version === profile.version;
