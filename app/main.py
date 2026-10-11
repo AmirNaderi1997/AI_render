@@ -33,6 +33,9 @@ from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, p
 from .health import router as health_router
 
 log = logging.getLogger(__name__)
+# Keep structured request events visible even when the process manager leaves
+# the root logger at its default WARNING level.
+log.setLevel(logging.INFO)
 
 
 @asynccontextmanager

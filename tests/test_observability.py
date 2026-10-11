@@ -27,6 +27,11 @@ async def _observability_failure():
     raise LookupError("response and logs must not expose this message")
 
 
+def test_application_request_logger_is_distinct_and_info_enabled():
+    assert log.name == "app.main"
+    assert log.getEffectiveLevel() <= logging.INFO
+
+
 def _set_health_checks(monkeypatch, *, database=True, redis=True, celery=True, disk=True, ffmpeg=True):
     for name, result in {
         "database": database,
