@@ -49,7 +49,8 @@ services:
       - JOBS_DIR=/app/job_data
     volumes:
       - job_data:/app/job_data
-      - ./assets:/app/assets:ro
+      # The Library API writes uploaded media and its index into this folder.
+      - ./assets:/app/assets
       # The My Effects API persists rules, favorites, and the selected Rafiei
       # style in presets/my_effects.yaml. Keep this mount writable for the API.
       - ./presets:/app/presets
