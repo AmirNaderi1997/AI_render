@@ -17,11 +17,17 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "anthropic"
     LLM_MODEL: str = "CLAUDE_SONNET_5_5"
     SAROVI_LLM_MODEL: str = "anthropic/claude-sonnet-5.5"
+    # Content Creator can use a dedicated text provider without changing the
+    # upload/edit planner used elsewhere in the application.
+    CONTENT_LLM_PROVIDER: str = ""
     CORRECTION_PROVIDER: str = ""
     CORRECTION_MODEL: str = ""
     VISION_PROVIDER: str = ""
     VISION_MODEL: str = "gpt-5-5-image"
     CONTENT_VOICE_PROVIDER: str = "edge"
+    # Per-call Content Creator narration provider. When empty, the legacy
+    # CONTENT_VOICE_PROVIDER/TTS_PROVIDER compatibility rules remain active.
+    CONTENT_TTS_PROVIDER: str = ""
     SAROVI_API_KEY: str = ""
     SAROVI_TTS_MODEL: str = ""
     SAROVI_TTS_VOICE: str = ""

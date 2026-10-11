@@ -53,6 +53,9 @@ def test_sarovi_voice_rejects_unplayable_output(tmp_path, monkeypatch):
 
 
 def test_voice_provider_defaults_to_edge_and_allows_sarovi(monkeypatch):
+    from app.config import settings
+    monkeypatch.delenv("CONTENT_TTS_PROVIDER", raising=False)
+    monkeypatch.setattr(settings, "CONTENT_TTS_PROVIDER", "")
     monkeypatch.setenv("SAROVI_API_KEY", "configured")
     monkeypatch.delenv("CONTENT_VOICE_PROVIDER", raising=False)
     assert _voice_provider() == "edge"
@@ -63,3 +66,10 @@ def test_voice_provider_defaults_to_edge_and_allows_sarovi(monkeypatch):
     monkeypatch.delenv("SAROVI_API_KEY")
     monkeypatch.setenv("CONTENT_VOICE_PROVIDER", "auto")
     assert _voice_provider() == "edge"
+
+
+def test_content_tts_provider_prefers_elevenlabs_override(monkeypatch):
+    monkeypatch.setenv("TTS_PROVIDER", "edge-tts")
+    monkeypatch.setenv("CONTENT_VOICE_PROVIDER", "edge")
+    monkeypatch.setenv("CONTENT_TTS_PROVIDER", "elevenlabs")
+    assert _voice_provider() == "elevenlabs"

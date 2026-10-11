@@ -86,6 +86,25 @@ def test_blocked_elevenlabs_falls_back_to_edge_tts(tmp_path, monkeypatch):
     assert Path(result.file_path).read_bytes() == b"edge-audio"
 
 
+def test_content_provider_override_uses_elevenlabs_without_global_tts_change(tmp_path, monkeypatch):
+    from brain import tts
+    monkeypatch.setenv("TTS_PROVIDER", "edge-tts")
+    calls = []
+
+    def generate(text, output):
+        calls.append(text)
+        Path(output).write_bytes(b"elevenlabs-audio")
+
+    monkeypatch.setattr(tts, "_generate_elevenlabs", generate)
+    monkeypatch.setattr(tts, "_get_audio_duration", lambda _: 1.0)
+
+    result = tts.generate_narration("سلام", tmp_path, provider="elevenlabs")
+
+    assert calls == ["سلام"]
+    assert Path(result.file_path).read_bytes() == b"elevenlabs-audio"
+    assert tts._configured_provider() == "edge-tts"
+
+
 def test_disabled_tts_skips_narration(tmp_path, monkeypatch):
     from brain import tts
     monkeypatch.setenv("TTS_PROVIDER", "disabled")

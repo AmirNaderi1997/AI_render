@@ -428,8 +428,8 @@ class SaroviProvider(_ExternalProvider):
         return LocalFallbackProvider(reason).suggest_edits(scene, context)
 
 
-def get_provider() -> AIProvider:
-    provider = _config("LLM_PROVIDER", default="").lower()
+def get_provider(provider_name: str | None = None) -> AIProvider:
+    provider = (provider_name or _config("LLM_PROVIDER", default="")).strip().lower()
     if provider == "jarvis" and _config("JARVIS_API_KEY"):
         return JarvisProvider()
     if provider == "sarovi" and _config("SAROVI_API_KEY"):

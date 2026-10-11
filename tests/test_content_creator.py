@@ -244,6 +244,23 @@ class TestStoryboardGenerationReel:
         assert edited["scenes"][1]["text_overlay"] == "My edited main point"
         assert json.loads((tmp_path / "storyboard.json").read_text())["scenes"][1]["text_overlay"] == "My edited main point"
 
+    def test_content_submission_uses_content_llm_provider_override(self, tmp_path, monkeypatch):
+        job = SimpleNamespace(id="sarovi-storyboard-job", dir=tmp_path)
+        storyboard = Storyboard(
+            prompt="یک عادت مفید",
+            content_type="reel",
+            language="fa",
+            style="rafiei_reel",
+            scenes=[Scene(index=0, description="شروع", duration_s=5)],
+        )
+        monkeypatch.setenv("CONTENT_LLM_PROVIDER", "sarovi")
+        with patch("app.jobs.create_job", return_value=job), \
+             patch("app.jobs._write_status"), \
+             patch("brain.content_creator.generate_storyboard", return_value=storyboard) as generate:
+            create_content("یک عادت مفید", "reel", "fa", provider_name="local_fixture")
+
+        assert generate.call_args.kwargs["provider_name"] == "sarovi"
+
 
 # ── 4. Storyboard generation — post ─────────────────────────────────────────
 

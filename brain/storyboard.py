@@ -206,6 +206,7 @@ def generate_storyboard(
     language: str = "fa",
     style: str = "rafiei_reel",
     creative_brief: Optional[dict[str, str]] = None,
+    provider_name: Optional[str] = None,
 ) -> Storyboard:
     if isinstance(content_type, str):
         content_type = ContentType(content_type)
@@ -214,7 +215,7 @@ def generate_storyboard(
     system = _build_storyboard_system_prompt(preset, content_type, language)
     user = _build_storyboard_user_prompt(prompt, content_type, style, creative_brief)
 
-    provider = get_provider()
+    provider = get_provider(provider_name)
     provider_context = {
         "name": style,
         "content_type": content_type.value,

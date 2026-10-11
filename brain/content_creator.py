@@ -43,6 +43,15 @@ def _load_checkpoint(path: Path, signature: str, provider_name: str) -> dict:
 
 
 def _voice_provider() -> str:
+    content_tts = os.environ.get(
+        "CONTENT_TTS_PROVIDER", settings.CONTENT_TTS_PROVIDER
+    ).strip().lower()
+    if content_tts:
+        if content_tts not in ("edge-tts", "elevenlabs", "disabled"):
+            raise ValueError(
+                "CONTENT_TTS_PROVIDER must be edge-tts, elevenlabs, or disabled"
+            )
+        return content_tts
     # TTS_PROVIDER is the current explicit narration contract. Keep an
     # explicitly configured legacy Sarovi route working until it is migrated.
     configured_tts = os.environ.get("TTS_PROVIDER", settings.TTS_PROVIDER).strip().lower()
@@ -73,7 +82,13 @@ def create_content(
     brief = {key: str((creative_brief or {}).get(key, "")).strip()[:500]
              for key in ("audience", "goal", "brand", "avoid")}
     brief = {key: value for key, value in brief.items() if value}
-    storyboard = generate_storyboard(prompt, ct, language, style, brief)
+    content_llm_provider = os.environ.get(
+        "CONTENT_LLM_PROVIDER", settings.CONTENT_LLM_PROVIDER
+    ).strip().lower()
+    storyboard = generate_storyboard(
+        prompt, ct, language, style, brief,
+        provider_name=content_llm_provider or None,
+    )
 
     job = create_job(user_id=user_id)
     (job.dir / "generated").mkdir(exist_ok=True)
@@ -278,11 +293,18 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         narration_segments: list[dict] = []
         warnings: list[str] = []
         voice_provider = _voice_provider()
-        voice_settings = (
-            f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
-            if voice_provider == "sarovi"
-            else f"{os.environ.get('TTS_VOICE', settings.TTS_VOICE)}:{settings.TTS_RATE}"
-        )
+        if voice_provider == "sarovi":
+            voice_settings = f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
+        elif voice_provider == "elevenlabs":
+            # The voice ID is safe checkpoint metadata; never persist the key.
+            voice_settings = os.environ.get(
+                "ELEVENLABS_VOICE_ID", settings.ELEVENLABS_VOICE_ID
+            )
+        else:
+            voice_settings = (
+                f"{os.environ.get('TTS_VOICE', settings.TTS_VOICE)}:"
+                f"{os.environ.get('TTS_RATE', settings.TTS_RATE)}"
+            )
         voice_signature = f"{voice_provider}:{voice_settings}"
         if checkpoint.get("voice_signature") != voice_signature:
             checkpoint["narration"] = []
@@ -309,7 +331,12 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                         else:
                             voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
                             voice_kwargs = {"voice_id": voice} if voice_provider in ("edge", "edge-tts") and voice and voice != "default" else {}
-                            tts_result = generate_narration(scene.narration_text, gen_dir, **voice_kwargs)
+                            tts_result = generate_narration(
+                                scene.narration_text,
+                                gen_dir,
+                                provider=voice_provider,
+                                **voice_kwargs,
+                            )
                             record = {
                                 "scene_index": scene.index,
                                 "file_path": tts_result.file_path,

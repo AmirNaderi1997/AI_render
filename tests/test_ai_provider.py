@@ -40,6 +40,16 @@ def test_factory_selects_only_configured_jarvis_sarovi_or_local(monkeypatch):
     assert isinstance(get_provider(), LocalFallbackProvider)
 
 
+def test_factory_allows_content_specific_provider_without_changing_global(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "jarvis")
+    monkeypatch.setenv("JARVIS_API_KEY", "jarvis-key")
+    monkeypatch.setenv("SAROVI_API_KEY", "sarovi-key")
+
+    assert isinstance(get_provider(), JarvisProvider)
+    assert isinstance(get_provider("sarovi"), SaroviProvider)
+    assert isinstance(get_provider(), JarvisProvider)
+
+
 def test_local_plan_and_storyboard_are_editable_templates(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "jarvis")
     monkeypatch.setenv("JARVIS_API_KEY", "")

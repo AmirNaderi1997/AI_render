@@ -46,13 +46,15 @@ async def _generate_async(text: str, output_path: str, voice: str, rate: str) ->
     await communicate.save(output_path)
 
 
-def _configured_provider() -> str:
+def _configured_provider(provider: str | None = None) -> str:
     """Return the explicitly selected narration provider.
 
     This is read at call time so worker processes and tests can change the
     environment without requiring an application restart.
     """
-    provider = os.environ.get("TTS_PROVIDER", "edge-tts").strip().lower()
+    provider = (provider or os.environ.get("TTS_PROVIDER", "edge-tts")).strip().lower()
+    if provider == "edge":
+        provider = "edge-tts"
     if provider not in {"edge-tts", "elevenlabs", "disabled"}:
         raise ValueError("TTS_PROVIDER must be edge-tts, elevenlabs, or disabled")
     return provider
@@ -91,12 +93,13 @@ def generate_narration(
     voice_id: str = "",
     model_id: str = "",
     rate: str = "+0%",
+    provider: str | None = None,
 ) -> TTSResult:
     """Generate narration using the configured provider, with Edge fallback."""
     if not text.strip():
         raise ValueError("narration text is empty")
 
-    provider = _configured_provider()
+    provider = _configured_provider(provider)
     if provider == "disabled":
         log.info("narration skipped because TTS_PROVIDER=disabled")
         return TTSResult(file_path="", duration_s=0.0, cost_usd=0.0)
