@@ -51,16 +51,16 @@ def _voice_provider() -> str:
         "CONTENT_TTS_PROVIDER", settings.CONTENT_TTS_PROVIDER
     ).strip().lower()
     if content_tts:
-        if content_tts not in ("edge-tts", "elevenlabs", "disabled"):
+        if content_tts not in ("azure", "edge-tts", "elevenlabs", "disabled"):
             raise ValueError(
-                "CONTENT_TTS_PROVIDER must be edge-tts, elevenlabs, or disabled"
+                "CONTENT_TTS_PROVIDER must be azure, edge-tts, elevenlabs, or disabled"
             )
         return content_tts
     # TTS_PROVIDER is the current explicit narration contract. Keep an
     # explicitly configured legacy Sarovi route working until it is migrated.
     configured_tts = os.environ.get("TTS_PROVIDER", settings.TTS_PROVIDER).strip().lower()
-    if configured_tts not in ("edge-tts", "elevenlabs", "disabled"):
-        raise ValueError("TTS_PROVIDER must be edge-tts, elevenlabs, or disabled")
+    if configured_tts not in ("azure", "edge-tts", "elevenlabs", "disabled"):
+        raise ValueError("TTS_PROVIDER must be azure, edge-tts, elevenlabs, or disabled")
     if os.environ.get("TTS_PROVIDER") is not None:
         return configured_tts
     configured = os.environ.get("CONTENT_VOICE_PROVIDER", settings.CONTENT_VOICE_PROVIDER).strip().lower()
@@ -319,6 +319,16 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         voice_provider = _voice_provider()
         if voice_provider == "sarovi":
             voice_settings = f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
+        elif voice_provider == "azure":
+            # Include fallback voice and credential availability so prior audio
+            # is not reused after Azure becomes available.
+            voice_settings = (
+                f"fa={_default_narration_voice('fa')}:"
+                f"en={_default_narration_voice('en')}:"
+                f"fallback_fa={_default_elevenlabs_voice('fa')}:"
+                f"fallback_en={_default_elevenlabs_voice('en')}:"
+                f"configured={bool(os.environ.get('AZURE_SPEECH_KEY', '').strip() and os.environ.get('AZURE_SPEECH_REGION', '').strip())}"
+            )
         elif voice_provider == "elevenlabs":
             # The voice ID is safe checkpoint metadata; never persist the key.
             voice_settings = (
@@ -343,6 +353,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         cached_narration = {
             n["scene_index"]: n for n in checkpoint["narration"]
             if isinstance(n, dict) and Path(n.get("file_path", "")).is_file()
+            and (voice_provider != "azure" or n.get("provider") == "azure")
         }
         if voice_provider == "disabled":
             log.info("narration skipped for generated content because TTS_PROVIDER=disabled")
@@ -362,11 +373,13 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                         else:
                             voice = scene.narration_voice.strip() if isinstance(scene.narration_voice, str) else "default"
                             voice_kwargs = {}
-                            if voice_provider in ("edge", "edge-tts"):
+                            if voice_provider in ("azure", "edge", "edge-tts"):
                                 voice_kwargs["voice_id"] = (
                                     voice if voice and voice != "default"
                                     else _default_narration_voice(storyboard.language)
                                 )
+                                if voice_provider == "azure":
+                                    voice_kwargs["fallback_voice_id"] = _default_elevenlabs_voice(storyboard.language)
                             elif voice_provider == "elevenlabs":
                                 voice_kwargs["voice_id"] = (
                                     voice if voice and voice != "default"
@@ -394,7 +407,7 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                 "scene_index": scene.index,
                                 "file_path": tts_result.file_path,
                                 "duration_s": tts_result.duration_s,
-                                "provider": voice_provider,
+                                "provider": getattr(tts_result, "provider", "") or voice_provider,
                             }
                         if preset["is_static"]:
                             record = _fit_post_narration(record, gen_dir, preset, warnings)

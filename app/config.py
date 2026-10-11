@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     TTS_PROVIDER: str = "edge-tts"
     TTS_VOICE: str = "en-US-GuyNeural"
     TTS_RATE: str = "+0%"
+    AZURE_SPEECH_KEY: str = ""
+    AZURE_SPEECH_REGION: str = ""
     JARVIS_API_KEY: str = ""
     JARVIS_API_URL: str = ""
     JARVIS_MODEL: str = ""

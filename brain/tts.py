@@ -1,12 +1,14 @@
-"""Text-to-Speech via Microsoft Edge TTS (free, no API key)."""
+"""Text-to-speech providers for generated narration."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import re
 import subprocess
 import time
 import uuid
+from xml.sax.saxutils import escape
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +20,7 @@ class TTSResult:
     file_path: str
     duration_s: float
     cost_usd: float | None = None
+    provider: str = ""
 
 
 # Persian voices available in edge-tts:
@@ -55,8 +58,8 @@ def _configured_provider(provider: str | None = None) -> str:
     provider = (provider or os.environ.get("TTS_PROVIDER", "edge-tts")).strip().lower()
     if provider == "edge":
         provider = "edge-tts"
-    if provider not in {"edge-tts", "elevenlabs", "disabled"}:
-        raise ValueError("TTS_PROVIDER must be edge-tts, elevenlabs, or disabled")
+    if provider not in {"azure", "edge-tts", "elevenlabs", "disabled"}:
+        raise ValueError("TTS_PROVIDER must be azure, edge-tts, elevenlabs, or disabled")
     return provider
 
 
@@ -104,6 +107,46 @@ def _generate_elevenlabs(
         raise RuntimeError(f"ElevenLabs request failed ({type(exc).__name__})") from exc
 
 
+def _generate_azure(text: str, output_path: str, voice_id: str) -> None:
+    """Synthesize MP3 through an Azure Speech resource, with no key in errors."""
+    key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+    region = os.environ.get("AZURE_SPEECH_REGION", "").strip().lower()
+    if not key or not region:
+        raise RuntimeError("Azure Speech requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
+    if not re.fullmatch(r"[a-z0-9-]+", region):
+        raise RuntimeError("AZURE_SPEECH_REGION is invalid")
+    voice = voice_id.strip() or _DEFAULT_VOICE
+    locale = "fa-IR" if voice.lower().startswith("fa-ir-") else "en-US"
+    escaped_voice = escape(voice, {'"': "&quot;"})
+    ssml = (
+        f'<speak version="1.0" xml:lang="{locale}">'
+        f'<voice name="{escaped_voice}">'
+        f"{escape(text)}</voice></speak>"
+    )
+    try:
+        import httpx
+        response = httpx.post(
+            f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1",
+            headers={
+                "Ocp-Apim-Subscription-Key": key,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                "User-Agent": "AI_render",
+            },
+            content=ssml.encode("utf-8"),
+            timeout=httpx.Timeout(60.0, connect=10.0),
+        )
+        response.raise_for_status()
+        Path(output_path).write_bytes(response.content)
+        if not response.content or _get_audio_duration(output_path) <= 0:
+            raise RuntimeError("Azure Speech returned unplayable audio")
+    except Exception as exc:
+        Path(output_path).unlink(missing_ok=True)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if status else type(exc).__name__
+        raise RuntimeError(f"Azure Speech request failed ({detail})") from exc
+
+
 def generate_narration(
     text: str,
     output_dir: Path,
@@ -111,15 +154,16 @@ def generate_narration(
     model_id: str = "",
     rate: str = "+0%",
     provider: str | None = None,
+    fallback_voice_id: str = "",
 ) -> TTSResult:
-    """Generate narration using the configured provider, with Edge fallback."""
+    """Generate narration; Azure can fall back to an explicit ElevenLabs voice."""
     if not text.strip():
         raise ValueError("narration text is empty")
 
     provider = _configured_provider(provider)
     if provider == "disabled":
         log.info("narration skipped because TTS_PROVIDER=disabled")
-        return TTSResult(file_path="", duration_s=0.0, cost_usd=0.0)
+        return TTSResult(file_path="", duration_s=0.0, cost_usd=0.0, provider="disabled")
 
     edge_voice = _edge_voice(voice_id if provider == "edge-tts" else "")
     rate = os.environ.get("TTS_RATE", rate)
@@ -142,9 +186,29 @@ def generate_narration(
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 pool.submit(lambda: asyncio.run(generate_with_timeout())).result()
 
-    if provider == "elevenlabs":
+    requested_provider = provider
+    if provider == "azure":
         try:
-            log.info("generating narration with ElevenLabs (10s timeout)")
+            _generate_azure(text, str(out_file), voice_id)
+        except Exception as azure_exc:
+            out_file.unlink(missing_ok=True)
+            if not fallback_voice_id.strip():
+                raise RuntimeError(
+                    f"{azure_exc}; set a language-matched ElevenLabs fallback voice ID"
+                ) from azure_exc
+            log.warning("Azure Speech failed (%s); falling back to ElevenLabs", azure_exc)
+            try:
+                _generate_elevenlabs(text, str(out_file), voice_id=fallback_voice_id, model_id=model_id)
+                provider = "elevenlabs"
+            except Exception as fallback_exc:
+                out_file.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Azure Speech failed ({azure_exc}); ElevenLabs fallback failed ({fallback_exc})"
+                ) from fallback_exc
+
+    if provider == "elevenlabs" and requested_provider == "elevenlabs":
+        try:
+            log.info("generating narration with ElevenLabs")
             _generate_elevenlabs(text, str(out_file), voice_id=voice_id, model_id=model_id)
         except Exception as exc:
             # ElevenLabs is commonly inaccessible in Iran. Edge remains a
@@ -175,11 +239,14 @@ def generate_narration(
                 raise RuntimeError(f"edge-tts generation failed ({type(exc).__name__})") from exc
 
     if not out_file.exists() or out_file.stat().st_size == 0:
-        raise RuntimeError("edge-tts returned empty audio")
+        raise RuntimeError(f"{provider} returned empty audio")
 
     duration = _get_audio_duration(str(out_file))
     if duration <= 0:
         out_file.unlink(missing_ok=True)
-        raise RuntimeError("edge-tts returned audio with no playable duration")
+        raise RuntimeError(f"{provider} returned audio with no playable duration")
     log.info("TTS generated with %s: %s (%.1fs)", provider, out_file.name, duration)
-    return TTSResult(file_path=str(out_file), duration_s=duration, cost_usd=0.0)
+    return TTSResult(
+        file_path=str(out_file), duration_s=duration,
+        cost_usd=0.0 if provider == "edge-tts" else None, provider=provider,
+    )
