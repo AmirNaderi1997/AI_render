@@ -32,7 +32,7 @@ from .config import settings
 from .routers import ai, content, denoise, effects, fonts, jobs, music, plans, premiere, qc, render, style
 from .health import router as health_router
 
-log = logging.getLogger("uvicorn.error")
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager

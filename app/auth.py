@@ -21,7 +21,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal, DB_AVAILABLE
 from app.models import UserModel
 
-log = logging.getLogger("uvicorn.error")
+log = logging.getLogger(__name__)
 USE_DB = DB_AVAILABLE
 
 USERS_FILE = Path(__file__).resolve().parent.parent / "jobs" / "users.json"

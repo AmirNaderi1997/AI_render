@@ -13,7 +13,7 @@ from app import jobs as jobstore
 from app.job_access import get_job_for_request
 from .music import AUDIO_EXTENSIONS
 
-log = logging.getLogger("uvicorn.error")
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 

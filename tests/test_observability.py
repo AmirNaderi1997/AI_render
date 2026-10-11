@@ -146,7 +146,7 @@ def test_hermes_request_id_header_is_echoed():
 def test_request_id_and_request_fields_appear_in_json_log_output():
     output = io.StringIO()
     handler = logging.StreamHandler(output)
-    handler.setFormatter(jsonlogger.JsonFormatter())
+    handler.setFormatter(jsonlogger.JsonFormatter("%(name)s %(message)s"))
     handler.addFilter(SensitiveDataFilter())
     old_level = log.level
     log.addHandler(handler)
@@ -164,6 +164,7 @@ def test_request_id_and_request_fields_appear_in_json_log_output():
     assert request_record["method"] == "GET"
     assert request_record["path"] == "/health"
     assert request_record["status_code"] == 200
+    assert request_record["name"] == "app.main"
     assert isinstance(request_record["duration_ms"], (int, float))
 
 
@@ -171,7 +172,7 @@ def test_slow_request_logs_at_warning(monkeypatch, caplog):
     ticks = iter((100.0, 102.01))
     monkeypatch.setattr(main_module, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
 
-    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+    with caplog.at_level(logging.INFO, logger="app.main"):
         response = TestClient(app).get("/health")
 
     record = next(record for record in caplog.records if getattr(record, "event", None) == "http_request")
@@ -181,7 +182,7 @@ def test_slow_request_logs_at_warning(monkeypatch, caplog):
 
 
 def test_unhandled_request_failure_logs_error_type_without_message(caplog):
-    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+    with caplog.at_level(logging.INFO, logger="app.main"):
         response = TestClient(app).get("/auth/__observability_failure")
 
     record = next(record for record in caplog.records if getattr(record, "event", None) == "http_request")
