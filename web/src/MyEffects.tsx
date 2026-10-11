@@ -137,7 +137,15 @@ export default function MyEffects() {
   async function handleDeleteProfile(styleId: string, version: number, name: string) {
     if (!window.confirm(`Remove "${name} · v${version}" from My Effects? Existing jobs will keep their pinned version.`)) return;
     setError("");
-    try { await track(() => api.deleteStyleProfile(styleId, version)); await reloadStyles(); }
+    try {
+      await track(() => api.deleteStyleProfile(styleId, version));
+      const [styles, selection] = await Promise.all([
+        api.getStyleLibrary(),
+        api.getPlanStyleSelection(),
+      ]);
+      setStyleLibrary(styles);
+      setPlanStyleSelection(selection);
+    }
     catch (e) { setError(friendlyError(e, "update your effects")); }
   }
 
@@ -215,15 +223,25 @@ export default function MyEffects() {
           {styleLibrary.profiles.map(profile => {
             const key = `${profile.style_id}@${profile.version}`;
             const selected = planStyleSelection?.style_id === profile.style_id && planStyleSelection?.version === profile.version;
-            return <button type="button" key={key} className={`rafiei-style-card${selected ? " is-selected" : ""}`}
-              aria-pressed={selected} disabled={selectingPlanStyle !== null}
-              onClick={() => void handleSelectPlanStyle(profile.style_id, profile.version)}>
-              <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">{profile.name} · v{profile.version}</span>
-                <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === key ? "…" : selected ? "✓" : ""}</span></span>
-              <span className="rafiei-style-card__mood">{(profile.source?.type || "imported").replace(/_/g, " ")}</span>
-              <span className="rafiei-style-card__description">Apply this approved imported style to new plans. Existing jobs keep their current style.</span>
-              <span className="rafiei-style-card__action">{selected ? "Selected · Click to clear" : "Select this style"}</span>
-            </button>;
+            return <div key={key} className="plan-style-card-wrap">
+              <button type="button" className={`rafiei-style-card${selected ? " is-selected" : ""}`}
+                aria-pressed={selected} disabled={selectingPlanStyle !== null || pendingActions > 0}
+                onClick={() => void handleSelectPlanStyle(
+                  selected ? null : profile.style_id,
+                  selected ? null : profile.version,
+                )}>
+                <span className="rafiei-style-card__header"><span className="rafiei-style-card__title">{profile.name} · v{profile.version}</span>
+                  <span className="rafiei-style-card__check" aria-hidden="true">{selectingPlanStyle === key ? "…" : selected ? "✓" : ""}</span></span>
+                <span className="rafiei-style-card__mood">{(profile.source?.type || "imported").replace(/_/g, " ")}</span>
+                <span className="rafiei-style-card__description">Apply this approved imported style to new plans. Existing jobs keep their current style.</span>
+                <span className="rafiei-style-card__action">{selected ? "Selected · Click to deselect" : "Select this style"}</span>
+              </button>
+              <button type="button" className="danger-sm plan-style-card__delete"
+                disabled={selectingPlanStyle !== null || pendingActions > 0}
+                onClick={() => void handleDeleteProfile(profile.style_id, profile.version, profile.name)}
+                aria-label={`Delete ${profile.name} version ${profile.version}`}
+                title="Delete this saved plan style">Delete</button>
+            </div>;
           })}
         </div>
         {!loading && !styleLibrary.profiles.length && <p className="muted" style={{ marginTop: 10 }}>No approved styles yet. Import and approve one in <a href="/style-library">Styles &amp; Fonts Library</a>.</p>}
