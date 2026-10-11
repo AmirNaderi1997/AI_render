@@ -206,10 +206,10 @@ def test_poster_prefers_hook_word_over_higher_shareability_generic_question():
             {"id": "s2", "in": 3, "out": 6},
         ],
         "captions": [
-            {"start": 0, "end": 2, "text": "کدوم رو انتخاب میکنید", "style": "normal"},
-            {"start": 3, "end": 5, "text": "سرمایه اولیه نمیخواد", "style": "normal"},
+            {"start": 0, "end": 2, "text": "کدومش رو انتخاب می‌کنید؟", "style": "normal"},
+            {"start": 3, "end": 5, "text": "اصولا سرمایه اولیه نمیخواد", "style": "normal"},
         ],
-        "cover": {"text": "کدوم رو انتخاب میکنید", "source_caption_index": 0},
+        "cover": {"text": "کدومش رو انتخاب می‌کنید؟", "source_caption_index": 0},
     }
     analyses = [
         {"segment_id": "s1", "role": "question", "shareability_score": 10},
@@ -217,7 +217,7 @@ def test_poster_prefers_hook_word_over_higher_shareability_generic_question():
     ]
     _apply_poster(plan, analyses)
     assert "cover" not in plan
-    assert plan["poster"]["text"] == "سرمایه اولیه نمیخواد"
+    assert plan["poster"]["text"] == "اصولا سرمایه اولیه نمیخواد"
     assert plan["poster"]["source_caption_index"] == 1
     assert plan["poster"]["frame_time"] == 4.0
     assert "Hook score 70" in plan["poster"]["reason"]

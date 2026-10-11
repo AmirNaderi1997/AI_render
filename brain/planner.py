@@ -695,9 +695,9 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
     analysis_by_id = {a.get("segment_id"): a for a in analyses}
 
     role_bonus = {"hook": 15, "claim": 12, "contrast": 10, "question": 12, "emotion": 8}
-    hook_words = (
+    semantic_hook_markers = (
         "لازم نیست", "نمیخواد", "نمی‌خواد", "نداره", "بدون",
-        "چرا", "راز", "اشتباه", "؟", "?",
+        "چرا", "راز", "اشتباه",
     )
 
     def score_caption(caption: dict) -> tuple[int, dict]:
@@ -708,7 +708,11 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
         words = text.split()
         score = int(analysis.get("shareability_score", 5)) * 2   # lowered weight
         score += role_bonus.get(analysis.get("role"), 0)
-        score += 50 if any(m in text for m in hook_words) else 0  # dominant signal
+        # A question mark is only punctuation, not evidence that the sentence is
+        # poster-worthy.  Questions already receive their role bonus above;
+        # reserving this dominant bonus for meaningful hook language prevents a
+        # generic question from outranking a concrete, surprising benefit.
+        score += 50 if any(m in text for m in semantic_hook_markers) else 0
         score += 6 if 3 <= len(words) <= 7 else (-10 if len(words) > 10 or len(words) < 2 else 0)
         return score, analysis
 
