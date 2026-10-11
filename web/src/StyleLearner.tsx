@@ -44,9 +44,12 @@ export default function StyleLearner() {
   const [uploadMsg, setUploadMsg] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
+  const [rebuilding, setRebuilding] = React.useState(false);
+  const [actionStatus, setActionStatus] = React.useState("");
   const [error, setError] = React.useState("");
   const fileInput = React.useRef<HTMLInputElement>(null);
   const reloadSeq = React.useRef(0);
+  const hasLoaded = React.useRef(false);
   const mounted = React.useRef(true);
   React.useEffect(() => {
     mounted.current = true;
@@ -55,7 +58,7 @@ export default function StyleLearner() {
 
   const reload = React.useCallback(async () => {
     const seq = ++reloadSeq.current;
-    setLoading(true);
+    if (!hasLoaded.current) setLoading(true);
     const [profileResult, analysesResult, feedbackResult] = await Promise.allSettled([
       api.getLearnedProfile(), api.listReferenceAnalyses(), api.getFeedbackSummary(),
     ]);
@@ -67,6 +70,7 @@ export default function StyleLearner() {
     else failures.push(`References: ${errorText(analysesResult.reason)}`);
     if (feedbackResult.status === "fulfilled") setFeedback(feedbackResult.value);
     else failures.push(`Feedback: ${errorText(feedbackResult.reason)}`);
+    hasLoaded.current = true;
     setError(failures.join("\n"));
     setLoading(false);
   }, []);
@@ -136,10 +140,15 @@ export default function StyleLearner() {
   }
 
   async function handleRebuild() {
-    setBusy(true); setError("");
-    try { await api.rebuildLearnedProfile(); await reload(); setUploadMsg("Profile rebuilt."); }
-    catch (e) { setError(`Profile rebuild failed: ${errorText(e)}`); }
-    finally { setBusy(false); }
+    setBusy(true); setRebuilding(true); setError(""); setActionStatus("Rebuilding profile from your analyzed reels…");
+    try {
+      const result = await api.rebuildLearnedProfile();
+      await reload();
+      setActionStatus(`Profile rebuilt from ${result.sample_count} reference reel${result.sample_count === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setActionStatus("");
+      setError(`Profile rebuild failed: ${errorText(e)}`);
+    } finally { setBusy(false); setRebuilding(false); }
   }
 
   async function handleEnabled(enabled: boolean) {
@@ -363,15 +372,16 @@ export default function StyleLearner() {
 
       {/* Actions */}
       <div className="action-bar">
+        {actionStatus && <span role="status" aria-live="polite">{rebuilding && <span className="ui-spinner" aria-hidden="true" style={{ display: "inline-block", verticalAlign: "middle", marginRight: 8 }} />}{actionStatus}</span>}
         <label className="muted">
           <input type="checkbox" checked={Boolean(profile?.active && profile?.enabled)}
             onChange={e => void handleEnabled(e.target.checked)}
             disabled={!profile?.active || uploading || busy || loading} />
           Apply learned style to future plans without a pinned style
         </label>
-        <button className="secondary" disabled={uploading || busy || loading || !Object.keys(profile?.metrics || {}).length} title={(uploading || busy || loading || !Object.keys(profile?.metrics || {}).length) ? "Analyze reference reels before saving a style." : undefined} onClick={() => void handleReset()}>Reset to Default</button>
+        <button type="button" className="secondary" disabled={uploading || busy || loading || !Object.keys(profile?.metrics || {}).length} title={(uploading || busy || loading || !Object.keys(profile?.metrics || {}).length) ? "Analyze reference reels before saving a style." : undefined} onClick={() => void handleReset()}>Reset to Default</button>
         {analyses.length > 0 && (
-          <button disabled={uploading || busy || loading} title={(uploading || busy || loading) ? "Wait for loading to finish." : undefined} onClick={() => void handleRebuild()}>Rebuild Profile</button>
+          <button type="button" disabled={uploading || busy || loading} aria-busy={rebuilding} title={(uploading || busy || loading) ? "Wait for loading to finish." : "Recalculate your learned profile from all analyzed reels."} onClick={() => void handleRebuild()}>{rebuilding ? "Rebuilding…" : "Rebuild Profile"}</button>
         )}
       </div>
     </div>
