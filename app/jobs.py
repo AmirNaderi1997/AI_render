@@ -898,6 +898,13 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         _write_status(job)
 
         data = load_plan(job)
+        # Saved jobs can predate the current hook-first poster rating. Refresh
+        # them immediately before rendering so a re-render does not keep an
+        # obsolete poster choice forever.
+        from brain.planner import refresh_stale_poster_rating
+        if refresh_stale_poster_rating(data):
+            job.plan_data = data
+            _write_status(job)
         render_plan_sha256 = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         plan, errs = validate_plan(data, base_dir=job.dir, check_media=True)
         if errs:

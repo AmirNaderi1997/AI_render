@@ -675,6 +675,9 @@ def _output_segment_marks(plan_data: dict) -> tuple[list[tuple[float, float, str
     return marks, max(0, cursor) / fps
 
 
+POSTER_RATING_VERSION = 2
+
+
 def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
     """Pick the most hook-worthy caption for the poster image.
 
@@ -696,7 +699,7 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
 
     role_bonus = {"hook": 15, "claim": 12, "contrast": 10, "question": 12, "emotion": 8}
     semantic_hook_markers = (
-        "لازم نیست", "نمیخواد", "نمی‌خواد", "نداره", "بدون",
+        "لازم نیست", "نمیخواد", "نمی‌خواد", "نمیخواهد", "نمی‌خواهد", "نداره", "بدون",
         "چرا", "راز", "اشتباه",
     )
 
@@ -729,9 +732,19 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
             max(0.0, output_duration - 1 / fps),
         ), 3),
         "source_caption_index": best_idx,
+        "rating_version": POSTER_RATING_VERSION,
         "reason": (f"Hook score {best_score}: shareability "
                    f"{analysis.get('shareability_score', 5)}/10, role {analysis.get('role', 'unknown')}"),
     }
+
+
+def refresh_stale_poster_rating(plan_data: dict) -> bool:
+    """Apply the current deterministic poster scorer to an older saved plan."""
+    poster = plan_data.get("poster") or {}
+    if int(poster.get("rating_version") or 0) >= POSTER_RATING_VERSION:
+        return False
+    _apply_poster(plan_data, [])
+    return True
 
 
 def generate_plan_local(

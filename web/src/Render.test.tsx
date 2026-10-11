@@ -6,7 +6,11 @@ import Render from "./Render";
 import { api } from "./api";
 
 vi.mock("./PremiereCard", () => ({ PremiereCard: () => null }));
-vi.mock("./AuthenticatedMedia", () => ({ AuthenticatedMedia: ({ as, ...props }: any) => React.createElement(as, props) }));
+vi.mock("./AuthenticatedMedia", () => ({
+  AuthenticatedMedia: ({ as, posterSrc, ...props }: any) => React.createElement(as, {
+    ...props, ...(posterSrc ? { poster: posterSrc } : {}),
+  }),
+}));
 vi.mock("./QCReview", () => ({ default: () => null }));
 vi.mock("./ui", () => ({
   Breadcrumbs: () => null, JobWorkflow: () => null, LoadingState: () => <div>Loading</div>,
@@ -64,7 +68,7 @@ describe("Render polling", () => {
     expect(denoiseStatus).toHaveBeenCalledTimes(settledCalls);
   });
 
-  it("shows the rendered poster and its selected sentence beside the video preview", async () => {
+  it("uses the rendered poster as the video's pre-play frame without a separate preview", async () => {
     vi.spyOn(api, "renderStatus").mockResolvedValue({
       ...renderResponse("done"), output: "v2_preview.mp4",
     });
@@ -76,8 +80,9 @@ describe("Render polling", () => {
 
     mountRender();
 
-    const poster = await screen.findByRole("img", { name: "Poster preview: The selected hook" });
-    expect(poster).toHaveAttribute("src", expect.stringContaining("v2_preview_poster.jpg"));
-    expect(screen.getByText("The selected hook")).toBeInTheDocument();
+    const video = await screen.findByLabelText("Video preview with poster: The selected hook");
+    expect(video).toHaveAttribute("poster", expect.stringContaining("v2_preview_poster.jpg"));
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByText("Poster Preview")).not.toBeInTheDocument();
   });
 });

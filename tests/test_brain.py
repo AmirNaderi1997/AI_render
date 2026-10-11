@@ -11,6 +11,7 @@ from brain.silence import word_gap_ranges, merge_ranges, _invert, detect_pauses
 from brain.planner import (
     source_to_output_time, output_to_source_time, generate_plan, _caption_review,
     _ensure_visual_effects, _apply_poster, _enforce_selected_effect,
+    refresh_stale_poster_rating, POSTER_RATING_VERSION,
 )
 from brain.llm import LLMUsage, _extract_json, chat_json
 from app.config import settings
@@ -220,7 +221,38 @@ def test_poster_prefers_hook_word_over_higher_shareability_generic_question():
     assert plan["poster"]["text"] == "اصولا سرمایه اولیه نمیخواد"
     assert plan["poster"]["source_caption_index"] == 1
     assert plan["poster"]["frame_time"] == 4.0
+    assert plan["poster"]["rating_version"] == POSTER_RATING_VERSION
     assert "Hook score 70" in plan["poster"]["reason"]
+
+
+def test_stale_poster_is_refreshed_once_with_latest_rating():
+    plan = {
+        "segments": [{"id": "s1", "in": 0, "out": 3}, {"id": "s2", "in": 3, "out": 6}],
+        "captions": [
+            {"start": 0, "end": 2, "text": "کدومش رو انتخاب می‌کنید؟", "style": "normal"},
+            {"start": 3, "end": 5, "text": "اصولا سرمایه اولیه نمیخواد", "style": "normal"},
+        ],
+        "poster": {"text": "کدومش رو انتخاب می‌کنید؟", "frame_time": 1.0},
+    }
+
+    assert refresh_stale_poster_rating(plan) is True
+    assert plan["poster"]["text"] == "اصولا سرمایه اولیه نمیخواد"
+    assert plan["poster"]["rating_version"] == POSTER_RATING_VERSION
+    assert refresh_stale_poster_rating(plan) is False
+
+
+def test_poster_rating_recognises_formal_persian_negative_verb():
+    plan = {
+        "segments": [{"id": "s1", "in": 0, "out": 3}, {"id": "s2", "in": 3, "out": 6}],
+        "captions": [
+            {"start": 0, "end": 2, "text": "کدومش رو انتخاب می‌کنید؟", "style": "normal"},
+            {"start": 3, "end": 5, "text": "سرمایه اولیه اصولاً نمی‌خواهد", "style": "emphasis"},
+        ],
+    }
+
+    _apply_poster(plan, [])
+
+    assert plan["poster"]["text"] == "سرمایه اولیه اصولاً نمی‌خواهد"
 
 
 def test_poster_picks_stronger_hook_and_breaks_ties_by_caption_order():

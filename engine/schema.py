@@ -155,6 +155,7 @@ class Poster(BaseModel):
     text: str = Field(min_length=1)
     frame_time: float = Field(default=1.0, ge=0.0, allow_inf_nan=False)
     source_caption_index: Optional[int] = Field(default=None, ge=0)
+    rating_version: int = Field(default=0, ge=0)
     reason: Optional[str] = None
 
 

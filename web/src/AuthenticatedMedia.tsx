@@ -29,9 +29,9 @@ export function useAuthenticatedMediaUrl(url: string | null | undefined): string
   return useAuthenticatedMediaState(url).mediaUrl;
 }
 
-type Props = { as: "img" | "audio" | "video"; src: string } & Record<string, any>;
+type Props = { as: "img" | "audio" | "video"; src: string; posterSrc?: string } & Record<string, any>;
 
-export const AuthenticatedMedia = React.forwardRef<any, Props>(({ as, src, ...props }, ref) => {
+export const AuthenticatedMedia = React.forwardRef<any, Props>(({ as, src, posterSrc, ...props }, ref) => {
   const elementRef = React.useRef<HTMLElement | null>(null);
   const [visible, setVisible] = React.useState(as !== "img" || props.loading !== "lazy");
   React.useEffect(() => {
@@ -42,9 +42,13 @@ export const AuthenticatedMedia = React.forwardRef<any, Props>(({ as, src, ...pr
     return () => observer.disconnect();
   }, [visible]);
   const { mediaUrl, error } = useAuthenticatedMediaState(visible ? src : undefined);
+  const { mediaUrl: posterUrl } = useAuthenticatedMediaState(
+    visible && as === "video" ? posterSrc : undefined,
+  );
   if (error) return <div className="errors" role="alert">{error}</div>;
   return React.createElement(as, {
     ...props, ref: (node: HTMLElement | null): void => { elementRef.current = node; if (typeof ref === "function") ref(node); else if (ref) ref.current = node; }, src: mediaUrl, "aria-busy": !mediaUrl, "data-loading": !mediaUrl,
+    ...(as === "video" && posterSrc ? { poster: posterUrl } : {}),
     ...(as === "img" ? { alt: props.alt ?? "Media preview" } : { "aria-label": props["aria-label"] || (as === "audio" ? "Audio preview" : "Video preview") }),
   });
 });
