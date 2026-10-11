@@ -742,6 +742,7 @@ def generate_plan_local(
     style_ref: Optional[dict] = None,
     duration: Optional[float] = None,
     reason: str = "no external LLM provider available",
+    transcript: Optional[dict] = None,
 ) -> dict:
     """Build a one-scene plan (full video, original audio, no narration/SFX) without any LLM.
 
@@ -765,7 +766,7 @@ def generate_plan_local(
         "transition_style": transition_style,
         "transition_request": transition_request,
         "style_ref": style_ref,
-    }, {"duration": duration})
+    }, transcript or {"duration": duration})
     return plan_data
 
 

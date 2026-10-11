@@ -421,6 +421,11 @@ export default function NewReel() {
                 {genStatus.asr_cost_usd > 0 && ` · $${genStatus.asr_cost_usd.toFixed(4)}`}
               </div>
             )}
+            {genStatus.asr_fallback_reason && (
+              <div className="errors" role="status" style={{ marginTop: 6 }}>
+                {genStatus.asr_fallback_reason}
+              </div>
+            )}
           </div>
         )}
 

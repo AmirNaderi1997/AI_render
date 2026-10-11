@@ -193,7 +193,9 @@ def test_missing_provider_builds_and_persists_local_plan(tmp_path, media_dir):
     assert job.plan_data is not None
     assert job.plan_data["source"] == "raw/clip.mp4"
     assert job.plan_data["segments"] == [{"id": "s1", "in": 0.0, "out": 12.0}]
-    assert job.plan_data["captions"] == []
+    assert job.plan_data["captions"] == [
+        {"start": 0.1, "end": 0.9, "text": "مخصول رو", "style": "emphasis"}
+    ]
     assert job.plan_data["sfx"] == []
     assert job.plan_data["generation_meta"] == {
         "provider": "local",
@@ -218,6 +220,9 @@ def test_unreachable_provider_falls_back_to_local_plan(tmp_path, media_dir):
     assert job.generate.status == "done"
     assert job.plan_data is not None
     assert job.plan_data["segments"] == [{"id": "s1", "in": 0.0, "out": 12.0}]
+    assert job.plan_data["captions"] == [
+        {"start": 0.1, "end": 0.9, "text": "مخصول رو", "style": "emphasis"}
+    ]
     assert job.plan_data["generation_meta"]["provider"] == "local"
     assert "provider offline" in job.plan_data["generation_meta"]["fallback_reason"]
 

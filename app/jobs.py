@@ -58,6 +58,7 @@ class GenerateState:
     output_tokens: int = 0
     model: str = ""
     asr_engine: str = ""
+    asr_fallback_reason: str = ""
     asr_audio_seconds: float = 0.0
     asr_cost_usd: float = 0.0
     correction_model: str = ""
@@ -672,6 +673,8 @@ def _run_generate(
                 keyterms=glossary_terms or None,
             )
 
+        job.generate.asr_fallback_reason = str(transcript.get("fallback_reason") or "")
+
         asr_cost_path = job.dir / "asr_cost.json"
         if asr_cost_path.exists():
             asr_info = json.loads(asr_cost_path.read_text())
@@ -807,6 +810,7 @@ def _local_plan(job, transcript, style, output_kind, caption_font, caption_font_
         caption_font_id=caption_font_id, transition_style=transition_style,
         transition_request=transition_request, style_ref=style_ref,
         duration=float(transcript.get("duration") or 0) or None, reason=reason,
+        transcript=transcript,
     )
     _, errors = validate_plan(plan_data, base_dir=job.dir, check_media=True)
     if errors:

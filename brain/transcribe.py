@@ -525,6 +525,23 @@ def transcribe(
                 ) from whisper_error
             raise
 
+    if elevenlabs_error is not None:
+        # Preserve the actual engine and the reason an explicitly requested
+        # provider was not used. This prevents a successful Whisper fallback
+        # from being presented as an ElevenLabs result.
+        whisper_reason = str(result.get("fallback_reason") or "").strip()
+        provider_reason = f"ElevenLabs unavailable: {elevenlabs_error}"
+        fallback_reason = (
+            f"{provider_reason}; Whisper fallback: {whisper_reason}"
+            if whisper_reason else provider_reason
+        )
+        result = {
+            **result,
+            "fallback_from": "elevenlabs",
+            "fallback_reason": fallback_reason[:500],
+        }
+        transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+
     cost_path = out_dir / "asr_cost.json"
     cost_path.write_text(json.dumps({
         "engine": result.get("engine", "whisper"),

@@ -55,6 +55,27 @@ def test_local_plan_and_storyboard_are_editable_templates(monkeypatch):
     assert [scene.description for scene in storyboard.scenes] == ["Intro", "Main point", "Outro"]
 
 
+def test_local_plan_keeps_timestamped_transcript_as_renderable_captions():
+    transcript = {
+        "duration": 8.0,
+        "words": [
+            {"w": "سلام", "start": 0.1, "end": 0.5},
+            {"w": "این", "start": 0.6, "end": 0.9},
+            {"w": "یک", "start": 1.0, "end": 1.2},
+            {"w": "تست", "start": 1.3, "end": 1.7},
+            {"w": "است", "start": 1.8, "end": 2.1},
+            {"w": "دوم", "start": 3.2, "end": 3.6},
+            {"w": "موفق.", "start": 3.7, "end": 4.2},
+        ],
+    }
+    plan, _ = LocalFallbackProvider("offline").generate_plan(_plan_context(), transcript)
+
+    assert plan["captions"] == [
+        {"start": 0.1, "end": 2.1, "text": "سلام این یک تست است", "style": "emphasis"},
+        {"start": 3.2, "end": 4.0, "text": "دوم موفق.", "style": "cta"},
+    ]
+
+
 def test_planner_uses_factory_local_fallback_without_keys(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_PROVIDER", "jarvis")
     monkeypatch.setenv("JARVIS_API_KEY", "")
@@ -121,6 +142,22 @@ def test_sarovi_connection_failure_falls_back_without_exposing_key(monkeypatch, 
     assert "offline" in plan["generation_meta"]["fallback_reason"]
     assert usage.model == "local_template"
     assert "super-secret" not in caplog.text
+
+
+def test_jarvis_connection_failure_uses_configured_sarovi_before_local(monkeypatch):
+    monkeypatch.setenv("JARVIS_API_KEY", "jarvis-secret")
+    monkeypatch.setenv("SAROVI_API_KEY", "sarovi-secret")
+    expected = {"version": "0.3", "segments": [{"id": "s1"}]}
+    with patch.object(JarvisProvider, "_chat_json", side_effect=ConnectionError("offline")), \
+         patch.object(SaroviProvider, "_responses_json", return_value=(expected, SimpleNamespace(
+             input_tokens=2, output_tokens=3, model="sarovi-model", elapsed_sec=0.1,
+             cost_estimate=0.0,
+         ))) as sarovi:
+        plan, usage = JarvisProvider().generate_plan(_plan_context(), {"duration": 4.0})
+
+    sarovi.assert_called_once_with("Return JSON", "Build a plan")
+    assert plan == expected
+    assert usage.model == "sarovi-model"
 
 
 def test_timeout_uses_configured_ai_timeout(monkeypatch):

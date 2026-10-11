@@ -388,6 +388,9 @@ export default function PlanReview() {
       {genStatus?.status === "error" && (
         <div className="errors" role="alert">Generation failed: {genStatus.message} <a href="/new">Start a new reel</a></div>
       )}
+      {genStatus?.asr_fallback_reason && (
+        <div className="errors" role="status">ASR fallback: {genStatus.asr_fallback_reason}</div>
+      )}
 
       {(genStatus?.cost_usd > 0 || genStatus?.asr_cost_usd > 0) && (
         <div className="card" style={{ padding: "10px 16px", fontSize: 13 }}>

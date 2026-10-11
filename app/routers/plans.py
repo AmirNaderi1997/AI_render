@@ -95,6 +95,7 @@ def generate_status(job_id: str, request: Request, db: AsyncSession = Depends(ge
         "output_tokens": g.output_tokens,
         "model": g.model,
         "asr_engine": g.asr_engine,
+        "asr_fallback_reason": g.asr_fallback_reason,
         "asr_audio_seconds": g.asr_audio_seconds,
         "asr_cost_usd": g.asr_cost_usd,
         "correction_model": g.correction_model,

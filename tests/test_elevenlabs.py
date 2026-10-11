@@ -122,6 +122,10 @@ class TestFallbackOnError:
 
         mock_w.assert_called_once()
         assert result["engine"] == "whisper"
+        assert result["fallback_from"] == "elevenlabs"
+        assert "API down" in result["fallback_reason"]
+        persisted = json.loads((tmp_path / "transcript.json").read_text())
+        assert persisted["fallback_from"] == "elevenlabs"
 
 
 class TestChooseEngine:

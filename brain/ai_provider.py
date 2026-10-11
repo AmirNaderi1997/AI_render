@@ -148,6 +148,57 @@ class LocalFallbackProvider(AIProvider):
     def __init__(self, reason: str = "no external LLM provider configured") -> None:
         self.reason = reason
 
+    @staticmethod
+    def _captions_from_transcript(transcript: dict, duration: float) -> list[dict]:
+        """Build deterministic, renderable captions from timestamped ASR words.
+
+        The hosted planner is allowed to rewrite caption grouping and emphasis,
+        but losing a valid transcript just because that provider is offline is
+        never a safe fallback.  The local plan keeps the complete source, so
+        ASR source times are also output-timeline times.
+        """
+        timed_words: list[dict] = []
+        for raw in transcript.get("words") or []:
+            try:
+                text = str(raw.get("w") or "").strip()
+                start = max(0.0, float(raw.get("start")))
+                end = min(duration, float(raw.get("end")))
+            except (TypeError, ValueError):
+                continue
+            if text and end > start and start < duration:
+                timed_words.append({"text": text, "start": start, "end": end})
+
+        captions: list[dict] = []
+        group: list[dict] = []
+        sentence_endings = (".", "!", "?", "؟", "。")
+
+        def flush() -> None:
+            if not group:
+                return
+            captions.append({
+                "start": round(group[0]["start"], 3),
+                "end": round(group[-1]["end"], 3),
+                "text": " ".join(item["text"] for item in group),
+                "style": "normal",
+            })
+            group.clear()
+
+        for word in timed_words:
+            # Long silence starts a new readable caption even if the previous
+            # group has fewer than the preferred five words.
+            if group and word["start"] - group[-1]["end"] > 0.8:
+                flush()
+            group.append(word)
+            if len(group) >= 5 or word["text"].endswith(sentence_endings):
+                flush()
+        flush()
+
+        if captions:
+            captions[0]["style"] = "emphasis"
+            if len(captions) > 1:
+                captions[-1]["style"] = "cta"
+        return captions
+
     def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
         duration = float(video_metadata.get("duration") or transcript.get("duration") or 0)
         if duration <= 0:
@@ -174,7 +225,7 @@ class LocalFallbackProvider(AIProvider):
                 "style": str(video_metadata.get("transition_style") or "auto"),
                 "request": str(video_metadata.get("transition_request") or ""),
             },
-            "captions": [],
+            "captions": self._captions_from_transcript(transcript, duration),
             "broll": [],
             "sfx": [],
             "export": {"file": "output.mp4", "crf": 20},
@@ -279,10 +330,23 @@ class JarvisProvider(_ExternalProvider):
     def generate_plan(self, video_metadata: dict, transcript: dict) -> tuple[dict, LLMUsage]:
         system = str(video_metadata.get("system_prompt") or "Return a valid edit plan as JSON.")
         user = str(video_metadata.get("user_prompt") or json.dumps(transcript, ensure_ascii=False))
+
+        def sarovi_or_local(local: LocalFallbackProvider) -> tuple[dict, LLMUsage]:
+            if _config("SAROVI_API_KEY"):
+                try:
+                    log.warning("Jarvis plan generation unavailable; trying configured Sarovi provider")
+                    return SaroviProvider()._responses_json(system, user)
+                except Exception as exc:
+                    log.warning("Sarovi plan failover also failed (%s); using local fallback", exc)
+                    local = LocalFallbackProvider(
+                        f"Jarvis unavailable and Sarovi failover failed: {exc}"[:300]
+                    )
+            return local.generate_plan(video_metadata, transcript)
+
         return self._with_fallback(
             "plan generation",
             lambda: self._chat_json(system, user),
-            lambda local: local.generate_plan(video_metadata, transcript),
+            sarovi_or_local,
         )
 
     def generate_storyboard(self, prompt: Any, style: Any) -> tuple[dict, LLMUsage]:
