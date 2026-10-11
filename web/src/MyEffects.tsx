@@ -148,7 +148,7 @@ export default function MyEffects() {
       {rafiei && <section style={{ marginBottom: 32 }}>
         <h2>Rafiei Styles</h2>
         <p className="muted" style={{ marginBottom: 12 }}>Choose one style. Your selection is separate from Favorites and My Rules.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+        <div className="rafiei-style-grid">
           {rafiei.preferred_effects.map(id => {
             const eff = effects.find(item => item.id === id);
             if (!eff) return null;
@@ -156,39 +156,25 @@ export default function MyEffects() {
             return <button
               key={id}
               type="button"
+              className={`rafiei-style-card${selected ? " is-selected" : ""}`}
               style={{
-                display: "flex", flexDirection: "column", alignItems: "stretch",
-                gap: 6, padding: "14px 16px", minHeight: 140, textAlign: "left",
-                borderLeft: `4px solid ${hintColor(eff)}`,
-                background: selected ? "var(--success-soft)" : "var(--surface)",
-                border: `1px solid ${selected ? "var(--success)" : "var(--border)"}`,
-                borderLeftWidth: 4,
                 borderLeftColor: hintColor(eff),
-                color: "var(--text)",
-                borderRadius: "var(--radius-md)",
-                boxShadow: selected ? "0 0 20px rgba(52,211,153,0.1)" : "none",
-                cursor: "pointer",
-                transition: "all 0.2s",
               }}
               aria-pressed={selected}
               disabled={selectingRafiei !== null}
               onClick={() => handleSelectRafiei(id)}
               title={eff.description}
             >
-              <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{eff.label}</span>
-                <span style={{ color: "var(--success)", fontSize: 18, fontWeight: 800 }}>
+              <span className="rafiei-style-card__header">
+                <span className="rafiei-style-card__title">{eff.label}</span>
+                <span className="rafiei-style-card__check" aria-hidden="true">
                   {selectingRafiei === id ? "..." : selected ? "✓" : ""}
                 </span>
               </span>
-              {eff.mood && <span style={{
-                display: "inline-block", padding: "2px 8px", borderRadius: 100,
-                fontSize: 11, fontWeight: 600, background: "rgba(255,255,255,0.06)", color: hintColor(eff),
-                width: "fit-content"
-              }}>{eff.mood}</span>}
-              <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>{eff.description}</span>
-              <span style={{ marginTop: "auto", color: selected ? "var(--success)" : "var(--accent-hover)", fontSize: 11, fontWeight: 600 }}>
-                {selected ? "Selected — click to clear" : "Click to select"}
+              {eff.mood && <span className="rafiei-style-card__mood" style={{ color: hintColor(eff) }}>{eff.mood}</span>}
+              <span className="rafiei-style-card__description">{eff.description}</span>
+              <span className="rafiei-style-card__action">
+                {selected ? "Selected · Click to clear" : "Select this style"}
               </span>
             </button>;
           })}
