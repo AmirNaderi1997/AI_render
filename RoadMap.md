@@ -20,6 +20,74 @@ The feature history is in [docs/stages.md](docs/stages.md) and [plan.md](plan.md
 | User acceptance | Real login, upload, render, export, Hermes flow as applicable in browser | Not proven on VPS in this repository |
 | Hermes credential entry | Users enter App ID, App Secret, Access Token, and Instagram User ID in Hermes; no Instagram credential environment fallback | Implemented in source on 2026-10-12; local API tests passed; VPS/browser acceptance pending |
 
+## 2026-10-12: Match reference reel quality — captions, effects, transitions, pre-play cover
+
+- **Reference:** `ig_dash_t3djcci2.mp4` — 1080×1920 / 30 fps / 48.1 s, VP9+AAC-HE, Rafiei Holding reel.
+- **Goal:** close four specific quality gaps observed by frame-by-frame comparison of the reference against the current render pipeline.
+
+### Gap 1 — Rolling caption background (highest priority)
+
+**What the reference does:** rolling speech captions (the line that changes with each speech segment) sit on a **transparent background** — white text, no box. Our pipeline's `base.background_colour: "#10101088"` bleeds into the `normal` style and puts a dark rectangle behind every rolling caption.
+
+**Fix:** override `background_colour` to fully transparent (`"#00000000"`) in `styles.normal` inside `presets/rafiei_reel.yaml`. The persistent headline/hook keeps its dark background.
+
+**Files:** `presets/rafiei_reel.yaml` (1-line change in `styles.normal`)
+
+### Gap 2 — Persistent hook: italic style + inline word coloring in ASS
+
+**What the reference does:** the hook sentence (e.g. «وقتی **چند میلیارد** ضرر دادم، فهمیدم...») is rendered as one italic line with key words in yellow **inline** inside the same text run. This is only achievable through ASS tags (`{\c&H...&}word{\r}`) or the MLT built-in `subtitle` filter's per-word color sequences.
+
+**Current state:** the headline SRT fallback splits the hook into two separate subtitle layers — `headline_primary` (white, top) and `headline_accent` (yellow, bottom) — which produces two text boxes instead of one unified italic line with inline highlights. The ASS path (`build_ass`) does not include the persistent headline at all.
+
+**Fixes needed:**
+1. `engine/captions.py` — `build_ass()`: add the poster headline as a persistent ASS dialogue event spanning `0 → output_duration`, using inline `{\c...}` override tags on the highlighted words (same logic as `c.highlighted_word` already used for rolling captions). Style: a new `"headline"` ASS style entry, bold + italic, large size, dark opaque-background (BorderStyle 3), same colours as the existing SRT headline layers.
+2. `presets/rafiei_reel.yaml` — `styles.headline`: add `italic: true` and `ass_border_style: 3` so the ASS headline style gets the background box and slanted text.
+3. `engine/build_mlt.py` — `headline_{primary,accent}` SRT layers: pass `font_style = "Italic"` (already the field used for MLT subtitle filter; just needs to be read from the style dict).
+
+**Files:** `engine/captions.py`, `engine/build_mlt.py`, `presets/rafiei_reel.yaml`
+
+### Gap 3 — Rolling caption vertical position relative to hook
+
+**What the reference does:** rolling captions sit immediately above the persistent hook (≈35 px gap). The absolute pixel row is roughly y = 1100 in a 1920-px canvas. Our `base.margin_bottom: 520` places the rolling block in the middle of the frame, not above the hook.
+
+**Fix:** add `margin_bottom` to `styles.normal` (and `styles.emphasis`) to push rolling captions down so they land just above the hook. The hook headline occupies approximately y = 1200–1350 on the 1920-px canvas. A `margin_bottom` of ~680 (from bottom) puts rolling text at ≈y 1095 bottom-edge, matching the reference gap.
+
+**Files:** `presets/rafiei_reel.yaml` (`styles.normal.margin_bottom`, `styles.emphasis.margin_bottom`)
+
+### Gap 4 — Desaturation / monochrome effect for "serious" clips
+
+**What the reference does:** several clips (frame ~25 s) receive a nearly full desaturation — a cinematic B&W treatment emphasising weight of a statement. Our effect catalog has `dim_medium` (darkens) but no colour desaturation filter.
+
+**Fix:** in `engine/build_mlt.py`, wherever the `dim_medium` or a new `desaturate` light variant is applied, append an MLT `avfilter.hue` filter with `av.s=0` (saturation = 0 → B&W). Gate this behind the `light` property of the effect so only clips tagged with the desaturation variant get it. Alternatively expose a `desaturate` boolean in the effect YAML so the LLM planner can request it explicitly.
+
+**Files:** `engine/build_mlt.py`, `engine/effects.py` (new light variant `"desaturate"`)
+
+### Gap 5 — Pre-play cover title
+
+**Current state (confirmed working 2026-10-12):** the MP4's opening frame shows the persistent hook text burned in (from the MLT render). The Plan Review page labels the rated sentence as the preplay video title. This matches the reference (no separate title card; the hook IS the opening frame content).
+
+**No code change needed.** Verify only that `poster.show_in_video = true` is set by default for portrait plans.
+
+### Acceptance criteria
+
+| Check | Method |
+|---|---|
+| Rolling caption — no background box | FFmpeg frame extract at any mid-clip frame; caption text visible with no rectangle |
+| Hook — italic, one unified line | Frame extract; text slanted; "چند میلیارد" yellow inline, no two-box split |
+| Rolling caption above hook | Pixel-ruler on frame: rolling bottom edge ≤ hook top edge |
+| Desaturation on tagged clips | Frame extract at affected clip; saturation visually near zero |
+| Pre-play cover shows hook | `ffprobe -select_streams v -show_frames` first frame; hook text present |
+| No regression on audio | EBU R128 measured at −14±1.5 LUFS, true peak ≤ −1 dBFS |
+
+### Implementation order
+
+1. Gap 1 (one-line YAML change — lowest risk, immediate visible win)
+2. Gap 3 (YAML position tuning — no code change, testable with frame extract)
+3. Gap 2 (ASS inline coloring + italic — code change, requires libass on render host; SRT path is fallback)
+4. Gap 4 (desaturation effect — new MLT filter, LLM planner must opt in)
+
+---
+
 ## 2026-10-12: Global portrait render quality baseline
 
 - Goal: new portrait videos inherit the reference reel's readable persistent hook, stable short captions, and clear speech level. The supplied 48.13-second reference is 1080×1920 at 30 fps and measured −14.3 LUFS with −0.8 dBFS true peak; a prior project export measured −20.4 LUFS.

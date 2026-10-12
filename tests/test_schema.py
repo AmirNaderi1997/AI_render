@@ -76,7 +76,8 @@ def test_zoom_out_of_range_rejected():
 
 
 def test_hundred_effect_presets_are_typed_and_renderable():
-    assert len(EFFECT_CATALOG) == 100
+    # 10 motions × 11 lights (neutral + 9 originals + desaturate)
+    assert len(EFFECT_CATALOG) == 110
     for effect_id in EFFECT_CATALOG:
         xml = effect_filter_xml(effect_id, 90, 1080, 1920, 6)
         assert "<filter" in xml or effect_id == "steady__neutral"

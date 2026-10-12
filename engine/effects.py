@@ -29,6 +29,7 @@ LIGHTS = {
     "fade_in": "Gentle light fade in",
     "fade_out": "Gentle light fade out",
     "breath": "Subtle light swell",
+    "desaturate": "Full desaturation — cinematic B&W treatment",
 }
 
 EFFECT_CATALOG = {
@@ -160,6 +161,13 @@ EFFECT_FAMILIES: dict[str, dict] = {
         "avoid_after": ["drift", "tilt"],
         "framing_check": True,
     },
+    "bw": {
+        "ids": ["steady__desaturate", "slow_push__desaturate"],
+        "energy": 1, "mood": "serious",
+        "best_roles": ["loss", "contrast", "flashback", "heavy_statement", "warning"],
+        "description": "Full desaturation — cinematic B&W. Use for weight, consequence, or heavy emotional beats. Max once per video.",
+        "avoid_after": ["bw"],
+    },
 }
 
 # Annotate catalog entries with their family
@@ -271,6 +279,7 @@ def _light_keyframes(light: str, frames: int) -> str | None:
         "fade_in": f"0=0.82;{min(6, last)}=1.0",
         "fade_out": f"0=1.0;{max(0, last-6)}=1.0;{last}=0.82",
         "breath": f"0=1.0;{max(1, last//2)}=1.05;{last}=1.0",
+        "desaturate": None,  # handled separately via avfilter.hue
     }
     return levels[light]
 
@@ -289,4 +298,8 @@ def effect_filter_xml(effect_id: str, frames: int, width: int, height: int,
     if light:
         result += ('<filter mlt_service="brightness">'
                    f'<property name="level">{light}</property></filter>')
+    if spec["light"] == "desaturate":
+        result += ('<filter mlt_service="avfilter.hue">'
+                   '<property name="av.s">0</property>'
+                   '<property name="position">filter</property></filter>')
     return result

@@ -43,11 +43,15 @@ captions:
     margin_bottom: 520
     margin_sides: 110
   styles:
-    normal: {}
+    normal:
+      background_colour: "#00000000"   # no box behind rolling speech captions
+      margin_bottom: 680               # sit just above the persistent hook
     emphasis:
       # Emphasis captions are larger while the selected spoken word gets the accent color.
       colour: "#FFFFFF"
       size: 120
+      background_colour: "#00000000"   # no box; emphasis relies on word colour only
+      margin_bottom: 680
     cta:
       colour: "#FFD43B"
       size: 62
@@ -67,18 +71,21 @@ captions:
       accent_height: 130
     headline:
       enabled: true
+      italic: true
+      ass_border_style: 3              # opaque background box in ASS path
       split_min_words: 4
       primary_size: 72
-      primary_y: 1420
-      primary_height: 92
+      primary_y: 1380
+      primary_height: 100
       primary_colour: "#FFFFFF"
-      accent_size: 82
-      accent_y: 1518
-      accent_height: 110
+      accent_size: 90
+      accent_y: 1490
+      accent_height: 118
       accent_colour: "#FFD43B"
-      background_colour: "#101010B8"
-      margin_sides: 90
-      outline: 2
+      background_colour: "#101010CC"
+      margin_sides: 72
+      outline: 0
+      box_padding: 16
   # Stage 2: caption generation rules
   min_words: 2
   max_words: 5

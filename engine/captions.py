@@ -124,25 +124,52 @@ def build_ass(plan: Plan, style: dict) -> str:
              "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
              "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
              "Alignment, MarginL, MarginR, MarginV, Encoding"]
-    for name in STYLE_NAMES:
-        s = {**base, **(cap.get("styles", {}).get(name) or {})}
+    all_styles = list(STYLE_NAMES)
+    headline_s = cap.get("styles", {}).get("headline") or {}
+    has_headline_in_ass = (
+        plan.poster is not None
+        and plan.poster.show_in_video
+        and H > W  # portrait only
+        and headline_s.get("enabled", True)
+    )
+    if has_headline_in_ass:
+        all_styles = list(STYLE_NAMES) + ["headline"]
+
+    for name in all_styles:
+        if name == "headline":
+            s = {**base, **headline_s}
+            # Headline defaults: large, italic, dark background box.
+            size_default = int(headline_s.get("accent_size", 90))
+            bg_default = "#101010CC"
+            margin_v_default = int(H * 0.22)  # ≈420 px from bottom at 1920
+        else:
+            s = {**base, **(cap.get("styles", {}).get(name) or {})}
+            size_default = 78
+            bg_default = "#00000000"
+            margin_v_default = int(s.get("margin_bottom", 520))
         if selected_font:
             s["font"] = render_font_family(selected_font)
-        def scaled(key: str, default: int) -> int:
-            return max(0, int(round(float(s.get(key, default)) * scale)))
-        background = s.get("background_colour", "#00000000")
+        def scaled(key: str, default: int, _s: dict = s) -> int:
+            return max(0, int(round(float(_s.get(key, default)) * scale)))
+        background = s.get("background_colour", bg_default)
         background_alpha = background.lstrip("#")[6:8] if len(background.lstrip("#")) == 8 else "00"
         border_style = int(s.get("ass_border_style", 3 if background_alpha.upper() != "00" else 1))
         outline_size = scaled("outline", 6)
         if border_style == 3:
             # ASS uses the outline field as padding when BorderStyle is 3.
             outline_size = scaled("box_padding", 10)
+        italic_flag = -1 if s.get("italic", name == "headline") else 0
+        margin_v = (
+            max(0, int(round(margin_v_default * scale)))
+            if name == "headline"
+            else scaled("margin_bottom", 520)
+        )
         lines.append(
-            f"Style: {name},{s.get('font', 'Arial')},{max(1, scaled('size', 78))},"
+            f"Style: {name},{s.get('font', 'Arial')},{max(1, scaled('size', size_default))},"
             f"{ass_colour(s.get('colour', '#FFFFFF'))},&H000000FF,{ass_colour(s.get('outline_colour', '#000000'))},"
-            f"{ass_colour(background)},{-1 if s.get('bold', True) else 0},0,0,0,100,100,0,0,{border_style},"
+            f"{ass_colour(background)},{-1 if s.get('bold', True) else 0},{italic_flag},0,0,100,100,0,0,{border_style},"
             f"{outline_size},{scaled('shadow', 0)},2,{scaled('margin_sides', 60)},"
-            f"{scaled('margin_sides', 60)},{scaled('margin_bottom', 520)},1")
+            f"{scaled('margin_sides', 60)},{margin_v},1")
     lines += ["", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     highlight_colour = cap.get("highlight_colour", "#FFD43B")
     for c in plan.captions:
@@ -163,6 +190,27 @@ def build_ass(plan: Plan, style: dict) -> str:
         lines.append(
             f"Dialogue: 1,{ass_time(plan.cover.start)},{ass_time(plan.cover.end)},cover,,0,0,0,,"
             f"{ass_text(plan.cover.text)}"
+        )
+    if has_headline_in_ass:
+        # Persistent hook: spans the full video. Split into white lead + yellow accent
+        # using the same midpoint pivot as the SRT headline layers, then reassemble
+        # into a single inline-coloured ASS text run on one line.
+        hook_words = plan.poster.text.split()
+        pivot = max(1, (len(hook_words) + 1) // 2)
+        lead = " ".join(hook_words[:pivot])
+        tail = " ".join(hook_words[pivot:])
+        if tail:
+            hook_text = (
+                ass_text(lead) + " "
+                + "{\\c" + ass_colour(highlight_colour) + "}"
+                + ass_text(tail)
+                + "{\\r headline}"
+            )
+        else:
+            hook_text = ass_text(plan.poster.text)
+        end_t = max(0.001, plan.output_duration - 1.0 / (plan.canvas.fps or 30))
+        lines.append(
+            f"Dialogue: 2,{ass_time(0)},{ass_time(end_t)},headline,,0,0,0,,{hook_text}"
         )
     return "\n".join(lines) + "\n"
 

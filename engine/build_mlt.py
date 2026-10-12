@@ -635,8 +635,10 @@ def build(
             key = "primary" if variant.endswith("primary") else "accent"
             size = max(1, int(round(float(s.get(f"{key}_size", 68)) * typography_scale)))
             fg = mlt_colour(s.get(f"{key}_colour", "#FFFFFF" if key == "primary" else "#FFD43B"))
+            if s.get("italic", True):
+                font_style = "Italic"
             if family.startswith("Ray"):
-                family, font_style = "Ray ExtraBlack", "ExtraBlack"
+                family, font_style = "Ray ExtraBlack", "ExtraBlack Italic" if s.get("italic", True) else "ExtraBlack"
         else:
             size = max(1, int(round(size * typography_scale)))
         outline = max(0, int(round(outline * typography_scale)))

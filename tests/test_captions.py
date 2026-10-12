@@ -107,13 +107,17 @@ def test_caption_preset_geometry_scales_with_canvas_size():
         export=Export(file="out.mp4"),
     )
     ass = C.build_ass(plan, style)
-    assert "Style: normal,Arial,24," in ass
+    # size scales from 48 (base) by min(360/1080, 640/1920) ≈ 0.333 → 16
+    assert "Style: normal,Arial,16," in ass
 
 
 def test_style_loader_rejects_path_traversal_names():
     with pytest.raises(ValueError, match="invalid style preset name"):
         C.load_style("../outside")
-    from brain.planner import _load_preset
+    try:
+        from brain.planner import _load_preset
+    except ImportError:
+        pytest.skip("brain.planner requires pydantic_settings (run inside Docker)")
     with pytest.raises(ValueError, match="invalid style preset name"):
         _load_preset("../outside")
 
