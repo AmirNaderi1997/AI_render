@@ -20,6 +20,14 @@ The feature history is in [docs/stages.md](docs/stages.md) and [plan.md](plan.md
 | User acceptance | Real login, upload, render, export, Hermes flow as applicable in browser | Not proven on VPS in this repository |
 | Hermes credential entry | Users enter App ID, App Secret, Access Token, and Instagram User ID in Hermes; no Instagram credential environment fallback | Implemented in source on 2026-10-12; local API tests passed; VPS/browser acceptance pending |
 
+## 2026-10-12: Global portrait render quality baseline
+
+- Goal: new portrait videos inherit the reference reel's readable persistent hook, stable short captions, and clear speech level. The supplied 48.13-second reference is 1080×1920 at 30 fps and measured −14.3 LUFS with −0.8 dBFS true peak; a prior project export measured −20.4 LUFS.
+- Affected layers: shared poster planning/schema, MLT caption composition and preset, FFmpeg render and CLI defaults, post-render music mix, persisted job status, render and plan UI, app and Celery worker images, and frontend bundle. No database migration; existing job records accept the additive QC fields.
+- Acceptance: inspect a fresh full-size MLT/FFmpeg output and its standalone poster; verify an opted-out plan omits the hook; check FFprobe dimensions, frame rate and duration plus EBU R128 loudness and true peak; pass focused render/music tests and frontend build; inspect the changed UI in a local browser after Compose rebuild.
+- Local evidence: a six-second full-size render of the supplied reference as source produced a visible white/yellow persistent hook and a separate poster without the new hook doubled. It measured −15.4 LUFS and −2.9 dBFS true peak after normalization; a post-render music mix measured −15.2 LUFS and −3.1 dBFS true peak. The source already had burned captions, so this is a compositing and audio check. A separate authenticated local browser render of clean talking-head source produced a 26.13-second 1080×1920/30 fps export at −14.6 LUFS and −1.4 dBFS true peak with no technical QC warnings. Its inspected frames showed the persistent hook and changing speech captions. A preview also completed at 540×960 with −14.6 LUFS and no technical QC warnings. The later smaller-caption and enlarged-hook preset was inspected in a fresh MLT frame but is not represented in the full export. Local app and worker images were rebuilt and recreated; readiness passed for database, Redis, Celery, disk, and ffmpeg.
+- Deployment impact: rebuild app, Celery worker, and frontend locally; re-render older exports to gain the new on-video hook or normalization. Preserve pinned styles and the editor's hook and normalization opt-outs. VPS deployment still requires the gates in `GuideLine.md`.
+
 ## 2026-10-12: Self-contained video poster and Hermes credential entry
 
 - Goal: downloaded MP4s show the chosen poster before playback; each user enters all Instagram credentials in Hermes settings rather than server environment variables.

@@ -158,6 +158,7 @@ export interface MusicStatus {
   message: string;
   output: string | null;
   mixed_from: string | null;
+  technical_qc?: { loudness_lufs: number | null; true_peak_dbfs: number | null; warnings: string[] } | null;
 }
 
 async function authFetch(url: string, init?: RequestInit): Promise<Response> {
@@ -522,7 +523,7 @@ export const api = {
       body: JSON.stringify(body),
     }));
   },
-  async render(id: string, preview: boolean, loudnorm = false): Promise<{ status: string }> {
+  async render(id: string, preview: boolean, loudnorm = true): Promise<{ status: string }> {
     return j(await authFetch(`${BASE}/jobs/${id}/render?preview=${preview}&loudnorm=${loudnorm}`, { method: "POST" }));
   },
   async renderStatus(id: string, signal?: AbortSignal) {

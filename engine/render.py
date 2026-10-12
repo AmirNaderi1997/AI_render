@@ -278,7 +278,8 @@ def export_poster(plan, job_dir: Path, out: Path, base_dir: Optional[Path] = Non
 
     t = plan.poster.frame_time
     cover = Cover(text=plan.poster.text, start=t, end=t + 0.5)
-    poster_plan = plan.model_copy(update={"cover": cover})
+    # The video hook must not be painted twice onto the standalone poster.
+    poster_plan = plan.model_copy(update={"cover": cover, "poster": None})
     mlt, _ = build(poster_plan, Path(job_dir) / "poster_build", base_dir=base_dir,
                    style_name=style_name, style_override=style_override, style_ref=style_ref)
     _, _, fps = _profile_from_mlt(mlt.read_text())

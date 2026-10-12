@@ -687,6 +687,7 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
     so sentences like «سرمایه اولیه نمیخواد» always beat generic ones like
     «کدوم رو انتخاب میکنید».
     """
+    show_in_video = (plan_data.get("poster") or {}).get("show_in_video", True)
     plan_data.pop("cover", None)          # cover removed, poster only
 
     captions = plan_data.get("captions") or []
@@ -735,6 +736,7 @@ def _apply_poster(plan_data: dict, analyses: list[dict]) -> None:
         ), 3),
         "source_caption_index": best_idx,
         "rating_version": POSTER_RATING_VERSION,
+        "show_in_video": show_in_video,
         "reason": (f"Hook score {best_score}: shareability "
                    f"{analysis.get('shareability_score', 5)}/10, role {analysis.get('role', 'unknown')}"),
     }

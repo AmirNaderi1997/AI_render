@@ -128,6 +128,26 @@ def build(
                 )
                 cover_parts[name] = path
 
+    # The rated poster hook doubles as an optional, persistent lower-third in
+    # portrait videos. Keep its text in a separate feed from spoken captions
+    # so normal captions can change without making the hook flicker.
+    headline_parts: dict[str, Path] = {}
+    headline_style = (style.get("captions", {}).get("styles", {}) or {}).get("headline", {}) or {}
+    if (plan.poster and plan.poster.show_in_video and H / W >= 1.6
+            and headline_style.get("enabled", True)):
+        primary, accent = _split_cover_title(
+            plan.poster.text, int(headline_style.get("split_min_words", 4))
+        )
+        if accent is None:
+            accent, primary = primary, None
+        end = max(0.001, plan.output_duration - 1.0 / FPS)
+        for name, text in (("primary", primary), ("accent", accent)):
+            if not text:
+                continue
+            path = out_dir / f"captions.headline_{name}.srt"
+            path.write_text(f"1\n{srt_time(0)} --> {srt_time(end)}\n{text}\n", encoding="utf-8")
+            headline_parts[name] = path
+
     cap_cfg = style.get("captions", {})
     cap_base = dict(cap_cfg.get("base", {}))
     cap_styles = cap_cfg.get("styles", {}) or {}
@@ -538,6 +558,9 @@ def build(
             (len(STYLE_NAMES) - 1, "cover", "primary", cover_parts["primary"]),
             (len(STYLE_NAMES), "cover", "accent", cover_parts["accent"]),
         ])
+    for offset, variant in enumerate(("primary", "accent"), len(STYLE_NAMES) + 1):
+        if variant in headline_parts:
+            layers.append((offset, "headline", f"headline_{variant}", headline_parts[variant]))
     for feed_idx, name, variant, srt in layers:
         s = {**cap_base, **(cap_styles.get(name) or {})}
         if selected_font:
@@ -558,6 +581,12 @@ def build(
             fg = mlt_colour(s.get("accent_colour", "#FFD43B"))
             if family.startswith("Ray"):
                 family, font_style = "Ray ExtraBlack", "ExtraBlack"
+        elif variant in {"headline_primary", "headline_accent"}:
+            key = "primary" if variant.endswith("primary") else "accent"
+            size = max(1, int(round(float(s.get(f"{key}_size", 68)) * typography_scale)))
+            fg = mlt_colour(s.get(f"{key}_colour", "#FFFFFF" if key == "primary" else "#FFD43B"))
+            if family.startswith("Ray"):
+                family, font_style = "Ray ExtraBlack", "ExtraBlack"
         else:
             size = max(1, int(round(size * typography_scale)))
         outline = max(0, int(round(outline * typography_scale)))
@@ -568,6 +597,12 @@ def build(
         if variant in {"primary", "accent"}:
             y = round(float(s.get(f"{variant}_y", 180 if variant == "primary" else 285)) * typography_scale)
             h = round(float(s.get(f"{variant}_height", 110 if variant == "primary" else 130)) * typography_scale)
+            margin = round(float(s.get("margin_sides", 110)) * typography_scale)
+            geom = f"{margin}/{y}:{W - 2 * margin}x{h}:100"
+        elif variant in {"headline_primary", "headline_accent"}:
+            key = "primary" if variant.endswith("primary") else "accent"
+            y = round(float(s.get(f"{key}_y", 1420 if key == "primary" else 1510)) * typography_scale)
+            h = round(float(s.get(f"{key}_height", 90)) * typography_scale)
             margin = round(float(s.get("margin_sides", 110)) * typography_scale)
             geom = f"{margin}/{y}:{W - 2 * margin}x{h}:100"
         else:
@@ -582,7 +617,7 @@ def build(
             f'<property name="weight">{weight}</property>'
             f'<property name="fgcolour">{fg}</property>'
             f'<property name="olcolour">{ol}</property>'
-            f'<property name="bgcolour">0x00000000</property>'
+            f'<property name="bgcolour">{mlt_colour(s.get("background_colour", "#00000000"))}</property>'
             f'<property name="outline">{outline}</property>'
             f'<property name="halign">center</property>'
             f'<property name="valign">middle</property>'

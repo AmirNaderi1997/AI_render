@@ -75,6 +75,14 @@ def test_style_import_rejects_values_that_would_crash_rendering(tmp_path, monkey
         styles.import_style_file(
             "bad-preset.yaml", b"render:\n  preset: [bad]\n"
         )
+    with pytest.raises(ValueError, match="captions.styles.headline.background_colour"):
+        styles.import_style_file(
+            "bad-headline.yaml", b"captions:\n  styles:\n    headline:\n      background_colour: transparent\n"
+        )
+    with pytest.raises(ValueError, match="captions.styles.headline.enabled"):
+        styles.import_style_file(
+            "bad-hook-toggle.yaml", b"captions:\n  styles:\n    headline:\n      enabled: always\n"
+        )
 
 
 def test_style_selection_is_pinned_and_resolves_again_after_reload(tmp_path, monkeypatch):

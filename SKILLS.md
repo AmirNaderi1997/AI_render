@@ -5,6 +5,7 @@ This is the entry point for capabilities needed to ship this project. The detail
 | Capability | Main implementation | Acceptance evidence before VPS handoff |
 | --- | --- | --- |
 | Edit plan and rendering | `engine/`, `brain/planner.py`, `presets/` | Valid plan, real media render, inspectable video/audio and export files |
+| Export quality baseline | `engine/technical_qc.py`, `engine/build_mlt.py`, `brain/music.py` | Inspect portrait hook and captions, measure final and music-mixed loudness, review export warnings |
 | API and persistence | `app/`, `hermes/`, `alembic/` | Focused API tests, migration review, database-backed workflow |
 | User experience | `web/` | Build plus visible browser checks of the changed flow |
 | Background processing | `app/celery_app.py`, `app/tasks.py`, Redis | Job transitions, worker health, retry/failure behavior |

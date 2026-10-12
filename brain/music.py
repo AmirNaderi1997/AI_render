@@ -83,7 +83,8 @@ def music_filter(duration: float, volume: float, fade_in: float, fade_out: float
 
 
 def build_command(video: Path, music: Path, output: Path, *, duration: float, video_has_audio: bool,
-                  volume: float, fade_in: float, fade_out: float) -> list[str]:
+                  volume: float, fade_in: float, fade_out: float,
+                  target_lufs: float | None = None) -> list[str]:
     """FFmpeg argv that mixes `music` under the video's own audio.
 
     The music input is looped (so short tracks cover the whole video) and then
@@ -91,11 +92,14 @@ def build_command(video: Path, music: Path, output: Path, *, duration: float, vi
     becomes the only audio track.
     """
     chain = music_filter(duration, volume, fade_in, fade_out)
+    mixed_label = "mixed" if target_lufs is not None else "aout"
     if video_has_audio:
         graph = (f"[1:a]{chain}[music];"
-                 "[0:a][music]amix=inputs=2:duration=first:normalize=0[aout]")
+                 f"[0:a][music]amix=inputs=2:duration=first:normalize=0[{mixed_label}]")
     else:
-        graph = f"[1:a]{chain}[aout]"
+        graph = f"[1:a]{chain}[{mixed_label}]"
+    if target_lufs is not None:
+        graph += f";[mixed]loudnorm=I={target_lufs:g}:TP=-1.5:print_format=none[aout]"
     return [
         "ffmpeg", "-y", "-v", "error", "-nostdin", "-progress", "pipe:1", "-nostats",
         "-i", str(video), "-stream_loop", "-1", "-i", str(music),
@@ -135,6 +139,7 @@ def _run(cmd: list[str], duration: float, on_progress: Optional[Callable[[int], 
 def mix_music(video_path: Path, music_path: Path, output_path: Path, *,
               volume_level: float = DEFAULT_VOLUME, fade_in_seconds: float = DEFAULT_FADE_IN,
               fade_out_seconds: float = DEFAULT_FADE_OUT,
+              target_lufs: float | None = None,
               on_progress: Optional[Callable[[int], None]] = None) -> Path:
     """Mix `music_path` into `video_path`; the output is written atomically."""
     video_path, music_path, output_path = Path(video_path), Path(music_path), Path(output_path)
@@ -156,7 +161,8 @@ def mix_music(video_path: Path, music_path: Path, output_path: Path, *,
     output_path.parent.mkdir(parents=True, exist_ok=True)
     partial = output_path.with_name(f".{uuid.uuid4().hex[:8]}.{output_path.name}")
     cmd = build_command(video_path, music_path, partial, duration=duration, video_has_audio=source_audio,
-                        volume=volume, fade_in=fade_in, fade_out=fade_out)
+                        volume=volume, fade_in=fade_in, fade_out=fade_out,
+                        target_lufs=target_lufs)
     try:
         _run(cmd, duration, on_progress)
         partial.replace(output_path)
@@ -281,5 +287,23 @@ def mix_job_music(job_id: str, music_file_path: Optional[str | Path] = None, mus
             raise MusicMixError("music file must be inside the job directory")
     video = job.dir / "exports" / job.render.output
     output = video.with_name(f"{video.stem}_music.mp4")
+    target_lufs = music_target_lufs(job)
     return mix_music(video, music, output, volume_level=volume_level, fade_in_seconds=fade_in_seconds,
-                     fade_out_seconds=fade_out_seconds, on_progress=on_progress)
+                     fade_out_seconds=fade_out_seconds, target_lufs=target_lufs,
+                     on_progress=on_progress)
+
+
+def music_target_lufs(job) -> float | None:
+    """Use the same pinned render style and normalization choice for post-mix."""
+    if not job.render.loudnorm:
+        return None
+    import json
+    from engine.captions import load_style
+    style_name = (job.plan_data or {}).get("style") or "rafiei_reel"
+    style = load_style(style_name)
+    selection_path = job.dir / "style_selection.json"
+    if selection_path.exists():
+        from engine.style_library import resolve_preset
+        selection = json.loads(selection_path.read_text())
+        style = resolve_preset(selection["style_id"], int(selection["version"]))
+    return float(style.get("render", {}).get("loudness_lufs", -14))

@@ -13,7 +13,7 @@ router = APIRouter(prefix="/jobs", tags=["render"])
 
 
 @router.post("/{job_id}/render", status_code=202)
-def render(job_id: str, request: Request, preview: bool = False, loudnorm: bool = False, db: AsyncSession = Depends(get_db)):
+def render(job_id: str, request: Request, preview: bool = False, loudnorm: bool = True, db: AsyncSession = Depends(get_db)):
     job = get_job_for_request(request, job_id)
     if job.plan_data is None:
         raise HTTPException(400, "no plan.json for this job")
@@ -33,6 +33,7 @@ def render_status(job_id: str, request: Request, db: AsyncSession = Depends(get_
         "message": job.render.message,
         "output": job.render.output,
         "preview": job.render.preview,
+        "technical_qc": job.render.technical_qc,
         "versions": job.versions,
     }
 

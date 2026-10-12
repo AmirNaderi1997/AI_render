@@ -47,6 +47,7 @@ class RenderState:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     plan_sha256: Optional[str] = None
+    technical_qc: Optional[dict] = None
 
 
 @dataclass
@@ -94,6 +95,7 @@ class MusicState:
     message: str = ""
     output: Optional[str] = None  # mixed file in exports/; render.output is left untouched
     mixed_from: Optional[str] = None
+    technical_qc: Optional[dict] = None
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
 
@@ -495,6 +497,20 @@ def _run_mix(job: Job, *, raise_errors: bool = False) -> None:
 
         out = mix_job_music(job.id, music.file, volume_level=music.volume, fade_in_seconds=music.fade_in,
                             fade_out_seconds=music.fade_out, on_progress=report)
+        from engine.technical_qc import inspect_export
+        from brain.music import music_target_lufs
+        from engine.probe import probe
+        base_video = job.dir / "exports" / source
+        base_stream = next(s for s in probe(base_video)["streams"] if s.get("codec_type") == "video"
+                           and not s.get("disposition", {}).get("attached_pic"))
+        from fractions import Fraction
+        mix_fps = round(float(Fraction(base_stream["avg_frame_rate"])))
+        mix_duration = float(base_stream.get("duration") or probe(base_video)["format"]["duration"])
+        music.technical_qc = inspect_export(
+            out, width=int(base_stream["width"]), height=int(base_stream["height"]),
+            fps=mix_fps, duration=mix_duration,
+            target_lufs=music_target_lufs(job),
+        )
         music.output, music.mixed_from = out.name, source
         music.status, music.progress, music.message = "done", 100, ""
         music.finished_at = time.time()
@@ -508,7 +524,7 @@ def _run_mix(job: Job, *, raise_errors: bool = False) -> None:
             raise
 
 
-def start_render(job: Job, preview: bool = False, loudnorm: bool = False) -> None:
+def start_render(job: Job, preview: bool = False, loudnorm: bool = True) -> None:
     with _lock:
         if job.generate.status == "running":
             raise ValueError("plan generation must finish before rendering")
@@ -957,6 +973,22 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
                 crf=int(render_cfg.get("preview_crf", 22) if preview else plan.export.crf),
                 preset="veryfast" if preview else render_cfg.get("preset", "medium"),
             )
+
+        from engine.technical_qc import inspect_export
+        render_cfg = (style_override or load_style(plan.style)).get("render", {})
+        try:
+            preview_scale = float(render_cfg.get("preview_scale", 0.5))
+        except (TypeError, ValueError):
+            preview_scale = 0.5
+        preview_scale = min(1.0, max(0.1, preview_scale))
+        expected_width = max(2, int(plan.canvas.width * preview_scale) & ~1) if preview else plan.canvas.width
+        expected_height = max(2, int(plan.canvas.height * preview_scale) & ~1) if preview else plan.canvas.height
+        job.render.message = "checking export"
+        job.render.technical_qc = inspect_export(
+            out_path, width=expected_width, height=expected_height,
+            fps=plan.canvas.fps, duration=plan.output_duration,
+            target_lufs=float(render_cfg.get("loudness_lufs", -14)) if loudnorm else None,
+        )
 
         job.render.output = out_name
         job.render.plan_sha256 = render_plan_sha256

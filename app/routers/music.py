@@ -204,6 +204,7 @@ def _music_status(job) -> dict:
         "volume_level": m.volume, "fade_in_seconds": m.fade_in, "fade_out_seconds": m.fade_out,
         "status": m.status, "progress": m.progress, "message": m.message,
         "output": m.output, "mixed_from": m.mixed_from,
+        "technical_qc": m.technical_qc,
     }
 
 

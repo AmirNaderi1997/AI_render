@@ -31,12 +31,13 @@ captions:
   persian_font: "Ray ExtraBlack"   # default for Persian captions
   base:
     font: Arial
-    size: 72
+    size: 48
     bold: true
     weight: 900
     colour: "#FFFFFF"
     outline_colour: "#000000"
-    outline: 4
+    outline: 3
+    background_colour: "#10101088"
     shadow: 0
     margin_bottom: 520
     margin_sides: 110
@@ -46,10 +47,10 @@ captions:
       # Keep the subtitle feed visually stable. The previous whole-line gold
       # treatment looked like the subtitle colour was changing mid-video.
       colour: "#FFFFFF"
-      size: 82
+      size: 54
     cta:
       colour: "#FFD43B"
-      size: 80
+      size: 54
     cover:
       colour: "#FFFFFF"
       size: 84
@@ -64,6 +65,20 @@ captions:
       accent_size: 92
       accent_y: 285
       accent_height: 130
+    headline:
+      enabled: true
+      split_min_words: 4
+      primary_size: 72
+      primary_y: 1420
+      primary_height: 92
+      primary_colour: "#FFFFFF"
+      accent_size: 82
+      accent_y: 1518
+      accent_height: 110
+      accent_colour: "#FFD43B"
+      background_colour: "#101010B8"
+      margin_sides: 90
+      outline: 2
   # Stage 2: caption generation rules
   min_words: 2
   max_words: 5

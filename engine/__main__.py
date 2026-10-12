@@ -41,8 +41,8 @@ def main(argv=None) -> int:
     r.add_argument("plan")
     r.add_argument("--preview", action="store_true", help="fast preview (540x960, veryfast)")
     r.add_argument("--out", default=None)
-    r.add_argument("--loudnorm", action="store_true",
-                   help="run ffmpeg loudnorm (target LUFS from preset) after the render")
+    r.add_argument("--loudnorm", action=argparse.BooleanOptionalAction, default=True,
+                   help="normalize audio to the preset LUFS target (default: on)")
 
     args = p.parse_args(argv)
 

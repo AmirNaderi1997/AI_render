@@ -337,6 +337,11 @@ function MusicCard({ id, renderStatus, renderOutput }: { id: string; renderStatu
           {mixCurrent && music.output && (
             <div style={{ marginTop: 12 }}>
               <AuthenticatedMedia as="video" controls src={api.exportUrl(id, music.output)} aria-label="Video with music" />
+              {music.technical_qc && <p className="muted">
+                Mixed audio: {music.technical_qc.loudness_lufs ?? "unmeasured"} LUFS
+                {music.technical_qc.true_peak_dbfs != null && ` · peak ${music.technical_qc.true_peak_dbfs} dBFS`}
+              </p>}
+              {music.technical_qc?.warnings.map((warning, i) => <p className="errors" key={i}>{warning}</p>)}
             </div>
           )}
         </>
@@ -458,6 +463,13 @@ export default function Render() {
       <DenoiseCard id={id} />
 
       <MusicCard id={id} renderStatus={s.status} renderOutput={s.output} />
+      {finished && s.technical_qc && <div className="card" style={{ marginTop: 16 }}>
+        <h2>Export checks</h2>
+        <p className="muted">{s.technical_qc.width}×{s.technical_qc.height} · {s.technical_qc.duration_seconds}s
+          {s.technical_qc.loudness_lufs != null && ` · ${s.technical_qc.loudness_lufs} LUFS`}
+          {s.technical_qc.true_peak_dbfs != null && ` · peak ${s.technical_qc.true_peak_dbfs} dBFS`}</p>
+        {s.technical_qc.warnings?.map((warning: string, i: number) => <p className="errors" key={i}>{warning}</p>)}
+      </div>}
 
       {finished && s.output && (
         <div className="card" id="export">

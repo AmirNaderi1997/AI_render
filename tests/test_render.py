@@ -418,6 +418,28 @@ def test_poster_jpeg_exported_with_text(tmp_path, media_dir, has_melt):
     v = video_stream(out)
     assert (int(v["width"]), int(v["height"])) == (1080, 1920)
     assert "Poster hook" in (tmp_path / "poster_build" / "captions.cover.srt").read_text()
+    assert not list((tmp_path / "poster_build").glob("captions.headline_*.srt"))
+
+
+def test_portrait_poster_hook_is_reusable_and_can_be_disabled(tmp_path, media_dir):
+    tmp_path, data = _prep_job(tmp_path, media_dir, "captions.json")
+    data["poster"] = {"text": "یک نکته مهم برای امروز", "frame_time": 0.5}
+    plan, errs = validate_plan(data, base_dir=tmp_path, check_media=True)
+    assert not errs, errs
+    mlt, _ = build(plan, tmp_path, base_dir=tmp_path)
+    assert (tmp_path / "captions.headline_primary.srt").exists()
+    assert (tmp_path / "captions.headline_accent.srt").exists()
+    assert "captions.headline_accent.srt" in mlt.read_text()
+
+    disabled = plan.model_copy(update={"poster": plan.poster.model_copy(update={"show_in_video": False})})
+    off_dir = tmp_path / "off"
+    off_mlt, _ = build(disabled, off_dir, base_dir=tmp_path)
+    assert "captions.headline_" not in off_mlt.read_text()
+
+    post = plan.model_copy(update={"canvas": plan.canvas.model_copy(update={"height": 1350})})
+    post_dir = tmp_path / "post"
+    post_mlt, _ = build(post, post_dir, base_dir=tmp_path)
+    assert "captions.headline_" not in post_mlt.read_text()
 
 
 def test_mp4_contains_poster_as_opening_frame_and_cover(tmp_path):

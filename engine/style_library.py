@@ -86,9 +86,9 @@ def _validate_style(style: Any) -> dict:
     for group_name, group in groups:
         if not isinstance(group, dict):
             raise ValueError("caption styles must be mappings")
-        for key in ("colour", "outline_colour"):
+        for key in ("colour", "outline_colour", "background_colour", "primary_colour", "accent_colour"):
             if key in group and not re.fullmatch(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?", str(group[key])):
-                raise ValueError(f"{key} must be a #RRGGBB or #RRGGBBAA colour")
+                raise ValueError(f"{group_name}.{key} must be a #RRGGBB or #RRGGBBAA colour")
         for key, (minimum, maximum) in numeric_ranges.items():
             if key not in group:
                 continue
@@ -98,8 +98,9 @@ def _validate_style(style: Any) -> dict:
         for key in ("font", "font_style"):
             if key in group and (not isinstance(group[key], str) or not group[key].strip()):
                 raise ValueError(f"{group_name}.{key} must be a non-empty string")
-        if "bold" in group and not isinstance(group["bold"], bool):
-            raise ValueError(f"{group_name}.bold must be a boolean")
+        for key in ("bold", "enabled"):
+            if key in group and not isinstance(group[key], bool):
+                raise ValueError(f"{group_name}.{key} must be a boolean")
 
     render = merged.get("render", {})
     if not isinstance(render, dict):

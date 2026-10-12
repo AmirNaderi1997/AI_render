@@ -841,6 +841,10 @@ function VisualEditor({ jobId, plan, effects, onEffectChange, onUpdate, onDelete
           <input type="text" value={plan.poster.text || ""}
             aria-label="Poster text"
             onChange={e => onUpdate(["poster", "text"], e.target.value)} />
+          <label className="muted"><input type="checkbox"
+            checked={plan.poster.show_in_video !== false}
+            onChange={e => onUpdate(["poster", "show_in_video"], e.target.checked)} />
+            Keep this hook visible in portrait video</label>
           <span className="muted">Selected from the video at {(plan.poster.frame_time || 0).toFixed(2)}s; embedded in the MP4 opening frame when rendered.</span>
           {plan.poster.reason && <span className="muted" style={{ fontSize: 11 }}>{plan.poster.reason}</span>}
         </div>

@@ -10,6 +10,7 @@ Relevant skill(s) from SKILLS.md:
 RoadMap.md item or linked scoped plan:
 Constraints and contracts to preserve:
 Acceptance checks and expected outputs:
+Reference-video traits to match, with measured audio/video values and a fresh visual inspection:
 VPS impact (migration, config, storage, TLS, backup, rollback):
 ```
 

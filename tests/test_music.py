@@ -487,15 +487,17 @@ def test_render_auto_mixes_attached_music_and_failure_keeps_render(tmp_path, mon
     monkeypatch.setattr(jobs, "get", lambda _id: job)
     monkeypatch.setattr(jobs, "_write_status", lambda _job: None)
     monkeypatch.setattr(jobs, "CELERY_AVAILABLE", False)
+    monkeypatch.setattr(jobs, "load_plan", lambda current: current.plan_data)
     monkeypatch.setattr(jobs, "validate_plan", lambda *a, **k: (SimpleNamespace(
-        style="s", poster=False, export=SimpleNamespace(crf=None)), []))
+        style="s", poster=False, export=SimpleNamespace(crf=None),
+        canvas=SimpleNamespace(width=160, height=120, fps=30), output_duration=4.0), []))
     monkeypatch.setattr(jobs, "build", lambda *a, **k: (tmp_path / "p.mlt", None))
     seen = {}
     monkeypatch.setattr(jobs, "build_premiere", lambda *a, **k: seen.update(k))
     monkeypatch.setattr(jobs, "run_render", lambda mlt, out, **k: shutil.copy(media["voiced"], out))
 
     jobs._run_job(job, preview=False)
-    assert job.render.status == "done" and job.render.output == "v1.mp4"
+    assert job.render.status == "done" and job.render.output == "v1.mp4", job.render.message
     assert seen["attached_music"].file == tmp_path / "music" / "attached_1.wav"
     assert job.music.status == "done" and job.music.output == "v1_music.mp4"
     assert (tmp_path / "exports" / "v1_music.mp4").is_file()

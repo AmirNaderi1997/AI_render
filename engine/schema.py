@@ -157,6 +157,9 @@ class Poster(BaseModel):
     source_caption_index: Optional[int] = Field(default=None, ge=0)
     rating_version: int = Field(default=0, ge=0)
     reason: Optional[str] = None
+    # A selected hook can also remain visible in vertical video. Editors may
+    # turn this off for footage where it would cover important content.
+    show_in_video: bool = True
 
 
 class Broll(BaseModel):
