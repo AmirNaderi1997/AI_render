@@ -4,6 +4,10 @@
 
 The new export path embeds each selected poster as the MP4 opening frame and attached cover art. Hermes reads Instagram App ID, App Secret, Access Token, and User ID only from each user's encrypted UI settings. Local focused API/render tests and the frontend build passed; a real provider login, QuickTime playback, authenticated deployed browser flow, and VPS verification remain open. Rebuild app, worker, Hermes, and frontend images, and re-render older MP4s that need the poster. Existing Hermes users must save all four credential fields again. No database migration is needed for this change.
 
+### Local container update, 2026-10-12
+
+Revision `74a633e` was fast-forwarded to the clean local `main` checkout and deployed to the existing `ai_render` Compose project. App, worker, Hermes, frontend, and nginx images built; app, worker, and Hermes were recreated without replacing PostgreSQL or Redis volumes. The app, worker, Hermes, nginx, database, Redis, and beat reported healthy. `GET /healthz` and `/api/health/ready` returned HTTP 200; readiness checks for database, Redis, Celery, disk, and FFmpeg passed. The live app container produced the rated caption «سرمایه اولیه اصولا نمی‌خواد» from local fallback and Content Creator sample plans. The refreshed authenticated local browser displayed that saved poster text for job `1d4e7a5585de`. A newly generated end-to-end plan and downloaded MP4 were not inspected after this deployment. None of this verifies the VPS release gates below.
+
 ## Decision
 
 **Not ready to deploy yet.** This audit made the production path fail closed, but the local deployment inputs are incomplete: `ALLOWED_HOSTS` and `HERMES_TOKEN_KEY` are absent from the current `.env`, and `certs/fullchain.pem` and `certs/privkey.pem` are absent. No VPS, public TLS, PostgreSQL, Redis, provider, browser, or live Celery acceptance was performed. Do not treat a successful build or SQLite migration check as a live deployment check.
