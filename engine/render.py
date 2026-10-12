@@ -293,3 +293,39 @@ def export_poster(plan, job_dir: Path, out: Path, base_dir: Optional[Path] = Non
     if rc != 0 or not out.exists():
         raise RuntimeError(f"poster export failed (melt exit {rc})")
     return out
+
+
+def embed_poster(video: Path, poster: Path, *, crf: int = 20, preset: str = "medium") -> Path:
+    """Make the poster the MP4's opening frame and attached cover artwork.
+
+    The opening frame makes the paused video show the poster in players that
+    ignore MP4 cover artwork. Replacing one frame preserves narration timing.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg not found on PATH")
+    from .probe import probe
+
+    video = Path(video)
+    poster = Path(poster)
+    stream = next((s for s in probe(video).get("streams", [])
+                   if s.get("codec_type") == "video" and not s.get("disposition", {}).get("attached_pic")), None)
+    if not stream:
+        raise RuntimeError("rendered video has no video stream")
+    width, height = int(stream["width"]), int(stream["height"])
+    pending = video.with_name(f".{video.stem}.poster.tmp{video.suffix}")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(video), "-i", str(poster),
+            "-filter_complex",
+            f"[1:v]scale={width}:{height}:flags=lanczos,setsar=1[cover];"
+            "[0:v][cover]overlay=enable='eq(n,0)':eof_action=repeat,format=yuv420p[v]",
+            "-map", "[v]", "-map", "0:a?", "-map", "1:v",
+            "-map_metadata", "0", "-c:v:0", "libx264", "-crf", str(crf),
+            "-preset", preset, "-c:a", "copy", "-c:v:1", "mjpeg",
+            "-disposition:v:1", "attached_pic", "-movflags", "+faststart",
+            str(pending),
+        ], check=True, capture_output=True, text=True)
+        os.replace(pending, video)
+    finally:
+        pending.unlink(missing_ok=True)
+    return video

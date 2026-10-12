@@ -8,16 +8,10 @@ from hermes.security import current_user
 from hermes.services.instagram_api import InstagramAPI, InstagramError
 
 URL = "/api/hermes/settings/instagram"
-PAYLOAD = {"access_token": "IGQ-token-xyz", "instagram_user_id": "178414123456789", "app_secret": "secret-value-xyz"}
-
-
-def clear_env(monkeypatch):
-    for field in ("INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_APP_SECRET", "INSTAGRAM_BUSINESS_ACCOUNT_ID"):
-        monkeypatch.setattr(settings, field, "")
+PAYLOAD = {"access_token": "IGQ-token-xyz", "instagram_user_id": "178414123456789", "app_id": "123456", "app_secret": "secret-value-xyz"}
 
 
 def test_save_encrypts_and_never_returns_secrets(client, monkeypatch):
-    clear_env(monkeypatch)
     assert client.get(URL).json() == {"configured": False, "instagram_user_id": None}
     result = client.post(URL, json=PAYLOAD)
     assert result.status_code == 200
@@ -30,7 +24,6 @@ def test_save_encrypts_and_never_returns_secrets(client, monkeypatch):
 
 
 def test_settings_are_isolated_per_user_and_deletable(client, monkeypatch):
-    clear_env(monkeypatch)
     client.post(URL, json=PAYLOAD)
     app.dependency_overrides[current_user] = lambda: SimpleNamespace(id="user-two", is_active=True)
     assert client.get(URL).json()["configured"] is False
@@ -41,7 +34,6 @@ def test_settings_are_isolated_per_user_and_deletable(client, monkeypatch):
 
 
 def test_resave_keeps_created_at(client, monkeypatch):
-    clear_env(monkeypatch)
     client.post(URL, json=PAYLOAD)
     created = _read()["settings"]["instagram:user-one"]["created_at"]
     client.post(URL, json={**PAYLOAD, "instagram_user_id": "999"})
@@ -55,33 +47,30 @@ def test_validation_rejects_blank_missing_and_extra_fields(client):
     assert client.post(URL, json={**PAYLOAD, "unexpected": "value"}).status_code == 422
 
 
-def test_database_credentials_take_precedence_over_env(client, monkeypatch):
+def test_credentials_only_come_from_ui_settings(client, monkeypatch):
     import asyncio
-    clear_env(monkeypatch)
-    monkeypatch.setattr(settings, "INSTAGRAM_ACCESS_TOKEN", "env-token")
-    monkeypatch.setattr(settings, "INSTAGRAM_APP_SECRET", "env-secret")
-    monkeypatch.setattr(settings, "INSTAGRAM_BUSINESS_ACCOUNT_ID", "env-id")
-    assert asyncio.run(instagram_credentials("user-one"))["access_token"] == "env-token"
+    from hermes.config import Settings
+    for name in ("INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_BUSINESS_ACCOUNT_ID"):
+        monkeypatch.setenv(name, "legacy-env-credential")
+    assert not hasattr(Settings(_env_file=None), "INSTAGRAM_ACCESS_TOKEN")
+    assert not any(asyncio.run(instagram_credentials("user-one")).values())
     client.post(URL, json=PAYLOAD)
     values = asyncio.run(instagram_credentials("user-one"))
-    assert (values["access_token"], values["app_secret"], values["business_account_id"]) == (
-        "IGQ-token-xyz", "secret-value-xyz", "178414123456789")
+    assert values == {"access_token": PAYLOAD["access_token"], "app_id": PAYLOAD["app_id"],
+                      "app_secret": PAYLOAD["app_secret"], "business_account_id": PAYLOAD["instagram_user_id"]}
     client.delete(URL)
-    assert asyncio.run(instagram_credentials("user-one"))["access_token"] == "env-token"
+    assert not any(asyncio.run(instagram_credentials("user-one")).values())
 
 
-def test_unreadable_stored_credentials_fall_back_to_env(client, monkeypatch):
+def test_unreadable_stored_credentials_fail_closed(client, monkeypatch):
     import asyncio
-    clear_env(monkeypatch)
     client.post(URL, json=PAYLOAD)
     monkeypatch.setattr(settings, "HERMES_ENCRYPTION_KEY", "a-different-key-after-restart-0000")
-    monkeypatch.setattr(settings, "INSTAGRAM_ACCESS_TOKEN", "env-token")
-    assert asyncio.run(instagram_credentials("user-one"))["access_token"] == "env-token"
+    assert not any(asyncio.run(instagram_credentials("user-one")).values())
     assert client.get(URL).json()["configured"] is False
 
 
 def test_connection_status_uses_graph_api(client, monkeypatch):
-    clear_env(monkeypatch)
     client.post(URL, json=PAYLOAD)
     profile = AsyncMock(return_value={"id": "178414123456789", "username": "creator"})
     monkeypatch.setattr(InstagramAPI, "profile", profile)

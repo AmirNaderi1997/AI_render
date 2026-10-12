@@ -12,8 +12,9 @@ python -m pytest hermes/tests/ -v
 The blank overrides select local JSON storage and polling when the shared
 `.env` contains Docker hostnames for PostgreSQL and Redis.
 
-Required for live Instagram Login: `INSTAGRAM_APP_ID`,
-`INSTAGRAM_APP_SECRET`, and `INSTAGRAM_REDIRECT_URI`. The redirect URI must
+For live Instagram Login, each user enters App ID, App Secret, Access Token,
+and Instagram User ID in the Hermes settings UI. Only `INSTAGRAM_REDIRECT_URI`
+belongs in the server environment. The redirect URI must
 match `/api/hermes/auth/callback` and the URI registered with Meta. Hermes
 uses the main app's `JWT_SECRET` and user store. Set `HERMES_TOKEN_KEY` to a
 stable, separate secret before storing live Instagram tokens; changing it

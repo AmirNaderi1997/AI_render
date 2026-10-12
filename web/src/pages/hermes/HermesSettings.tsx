@@ -7,10 +7,11 @@ export type InstagramStatus = { configured: boolean; instagram_user_id: string |
 const fields = [
   ['access_token', 'Instagram Access Token', 'password'],
   ['instagram_user_id', 'Instagram User ID', 'text'],
+  ['app_id', 'App ID', 'text'],
   ['app_secret', 'App Secret', 'password'],
 ] as const;
 type Field = (typeof fields)[number][0];
-const empty: Record<Field, string> = { access_token: '', instagram_user_id: '', app_secret: '' };
+const empty: Record<Field, string> = { access_token: '', instagram_user_id: '', app_id: '', app_secret: '' };
 
 export function InstagramSettingsPanel({ onChanged }: { onChanged?: (status: InstagramStatus) => void }) {
   const [form, setForm] = useState(empty);
@@ -40,6 +41,7 @@ export function InstagramSettingsPanel({ onChanged }: { onChanged?: (status: Ins
       apply(await hermesApi.saveInstagramSettings({
         access_token: form.access_token.trim(),
         instagram_user_id: form.instagram_user_id.trim(),
+        app_id: form.app_id.trim(),
         app_secret: form.app_secret.trim(),
       }));
       setForm(empty);
@@ -63,7 +65,7 @@ export function InstagramSettingsPanel({ onChanged }: { onChanged?: (status: Ins
       <strong role="status" aria-live="polite" className={configured ? 'hm-positive' : 'hm-muted'}>
         {status === null ? 'Checking…' : configured ? `Configured${status.instagram_user_id ? ` · ${status.instagram_user_id}` : ''}` : 'Not configured'}
       </strong></div>
-    <p className="hm-tiny">Credentials are encrypted before storage and are never shown again. Saved values take precedence over the server's .env values.</p>
+    <p className="hm-tiny">Enter all Instagram API credentials here. They are encrypted before storage and are never shown again.</p>
     {error && <div className="hm-alert" role="alert">{error}</div>}
     {notice && <div className="hm-notice" role="status" style={{ color: '#6de2ca' }}>✓ {notice}</div>}
     <form onSubmit={save} autoComplete="off" noValidate style={{ display: 'grid', gap: 16 }}>

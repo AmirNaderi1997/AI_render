@@ -22,8 +22,9 @@ from app.models import Job as JobRecord, Plan as PlanRecord, QCResult, RenderRes
 from request_context import celery_request_headers
 from sqlalchemy import select
 from engine.build_mlt import build
+from engine.captions import load_style
 from engine.premiere import AttachedMusic, build_premiere
-from engine.render import render as run_render, export_poster
+from engine.render import render as run_render, export_poster, embed_poster
 from engine.schema import validate_plan
 
 
@@ -944,16 +945,18 @@ def _run_job(job: Job, preview: bool, loudnorm: bool = False, *, raise_errors: b
         )
 
         if plan.poster:
-            job.render.message = "exporting poster"
-            try:
-                export_poster(
-                    plan, job.dir, out_path.with_name(out_path.stem + "_poster.jpg"),
-                    base_dir=job.dir, style_name=plan.style,
-                    style_override=style_override, style_ref=style_ref,
-                )
-            except Exception as exc:  # poster is optional; never fail the render
-                import logging
-                logging.getLogger(__name__).warning("poster export failed: %s", exc)
+            job.render.message = "adding poster to video"
+            poster_path = out_path.with_name(out_path.stem + "_poster.jpg")
+            export_poster(
+                plan, job.dir, poster_path, base_dir=job.dir, style_name=plan.style,
+                style_override=style_override, style_ref=style_ref,
+            )
+            render_cfg = (style_override or load_style(plan.style)).get("render", {})
+            embed_poster(
+                out_path, poster_path,
+                crf=int(render_cfg.get("preview_crf", 22) if preview else plan.export.crf),
+                preset="veryfast" if preview else render_cfg.get("preset", "medium"),
+            )
 
         job.render.output = out_name
         job.render.plan_sha256 = render_plan_sha256

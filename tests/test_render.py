@@ -11,7 +11,7 @@ import pytest
 
 from engine.build_mlt import build
 from engine.captions import load_style
-from engine.render import _melt_env, melt_bin, render as run_render, export_poster
+from engine.render import _melt_env, melt_bin, render as run_render, export_poster, embed_poster
 from engine.probe import probe, has_audio, video_stream, probe_duration
 from engine.schema import validate_plan
 
@@ -418,6 +418,33 @@ def test_poster_jpeg_exported_with_text(tmp_path, media_dir, has_melt):
     v = video_stream(out)
     assert (int(v["width"]), int(v["height"])) == (1080, 1920)
     assert "Poster hook" in (tmp_path / "poster_build" / "captions.cover.srt").read_text()
+
+
+def test_mp4_contains_poster_as_opening_frame_and_cover(tmp_path):
+    from PIL import Image
+
+    video, poster = tmp_path / "video.mp4", tmp_path / "poster.jpg"
+    subprocess.run([
+        "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+        "color=c=red:s=160x90:r=10:d=1", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", str(video),
+    ], check=True)
+    subprocess.run([
+        "ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+        "color=c=blue:s=160x90", "-frames:v", "1", str(poster),
+    ], check=True)
+    embed_poster(video, poster)
+    streams = probe(video)["streams"]
+    main = next(s for s in streams if s["codec_type"] == "video" and not s["disposition"]["attached_pic"])
+    assert int(main["nb_frames"]) == 10
+    assert any(s["codec_type"] == "audio" for s in streams)
+    assert any(s["codec_type"] == "video" and s["disposition"]["attached_pic"] for s in streams)
+    first = tmp_path / "first.png"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(video),
+                    "-frames:v", "1", str(first)], check=True)
+    red, green, blue = Image.open(first).convert("RGB").getpixel((80, 45))
+    assert blue > 180 and red < 80 and green < 80
 
 
 def test_macos_melt_loads_bundled_ray_families(tmp_path, media_dir, has_melt):

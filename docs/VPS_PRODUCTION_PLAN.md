@@ -97,8 +97,8 @@ ALLOWED_ORIGINS=https://airender.yourdomain.com
 # Part B — Hermes Agent
 HERMES_PORT=8001
 HERMES_API_KEY=<internal-service-key>
-INSTAGRAM_APP_ID=...
-INSTAGRAM_APP_SECRET=...
+# Instagram credentials are entered per user in the Hermes UI, not here.
+INSTAGRAM_REDIRECT_URI=https://example.com/api/hermes/auth/callback
 HERMES_DATABASE_URL=postgresql://hermes:pass@db:5432/hermes
 HERMES_REDIS_URL=redis://redis:6379/2
 AIRENDER_API_URL=http://app:8000

@@ -18,6 +18,14 @@ The feature history is in [docs/stages.md](docs/stages.md) and [plan.md](plan.md
 | Data safety | Restorable PostgreSQL backup, migration review, storage durability | Not proven on VPS in this repository |
 | Runtime | Compose services, DB/Redis/worker readiness, HTTPS, logs | Not proven on VPS in this repository |
 | User acceptance | Real login, upload, render, export, Hermes flow as applicable in browser | Not proven on VPS in this repository |
-| Hermes credential entry | Users enter their Instagram credentials in the Hermes section of the site; remove the existing environment fallback before treating that policy as enforced | Pending; current code still accepts environment values |
+| Hermes credential entry | Users enter App ID, App Secret, Access Token, and Instagram User ID in Hermes; no Instagram credential environment fallback | Implemented in source on 2026-10-12; local API tests passed; VPS/browser acceptance pending |
+
+## 2026-10-12: Self-contained video poster and Hermes credential entry
+
+- Goal: downloaded MP4s show the chosen poster before playback; each user enters all Instagram credentials in Hermes settings rather than server environment variables.
+- Affected layers: MLT/FFmpeg export and job worker; Hermes API, encrypted settings storage, and frontend form; `.env` and VPS guidance. The existing sidecar JPEG remains for job thumbnails and HTML video poster display, while the MP4 carries its own opening frame and attached cover art.
+- Acceptance evidence: focused Hermes tests, real FFmpeg frame/stream test, offline API-to-render test, frontend build, and Render page tests passed locally on 2026-10-12. No live Instagram provider or VPS browser workflow was exercised.
+- Deployment impact: no schema migration; rebuild app, worker, Hermes, and frontend images. Existing MP4 exports require re-rendering to gain embedded posters. Keep `HERMES_TOKEN_KEY` stable for encrypted data; `INSTAGRAM_REDIRECT_URI` remains server configuration. Users with earlier saved Hermes settings must re-enter all four fields, including App ID.
+- Remaining gate: verify downloaded MP4 in QuickTime and a second player, and verify Hermes settings in an authenticated browser against the deployed stack before announcing release readiness.
 
 Do not infer deployment readiness from the presence of these documents or from a local build. Update this table only with dated, specific evidence.

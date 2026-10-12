@@ -263,6 +263,16 @@ def test_offline_generate_style_font_transition_music_preview_and_final(
         assert font_id in project
         assert (job_dir / "assets" / "fonts").is_dir()
         assert (job_dir / "exports" / "v2_poster.jpg").is_file()
+        rendered = job_dir / "exports" / "v2.mp4"
+        streams = probe(rendered)["streams"]
+        assert any(s["codec_type"] == "video" and s["disposition"]["attached_pic"] for s in streams)
+        from PIL import Image, ImageChops, ImageStat
+        opening = tmp_path / "opening.png"
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(rendered),
+                        "-frames:v", "1", str(opening)], check=True)
+        with Image.open(opening) as frame, Image.open(job_dir / "exports" / "v2_poster.jpg") as poster:
+            difference = ImageChops.difference(frame.convert("RGB"), poster.convert("RGB"))
+            assert max(ImageStat.Stat(difference).mean) < 15
         assert (job_dir / "project_premiere.xml").is_file()
 
 

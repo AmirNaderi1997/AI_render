@@ -1,5 +1,9 @@
 # Production readiness checklist — 2026-10-09
 
+## 2026-10-12 release delta
+
+The new export path embeds each selected poster as the MP4 opening frame and attached cover art. Hermes reads Instagram App ID, App Secret, Access Token, and User ID only from each user's encrypted UI settings. Local focused API/render tests and the frontend build passed; a real provider login, QuickTime playback, authenticated deployed browser flow, and VPS verification remain open. Rebuild app, worker, Hermes, and frontend images, and re-render older MP4s that need the poster. Existing Hermes users must save all four credential fields again. No database migration is needed for this change.
+
 ## Decision
 
 **Not ready to deploy yet.** This audit made the production path fail closed, but the local deployment inputs are incomplete: `ALLOWED_HOSTS` and `HERMES_TOKEN_KEY` are absent from the current `.env`, and `certs/fullchain.pem` and `certs/privkey.pem` are absent. No VPS, public TLS, PostgreSQL, Redis, provider, browser, or live Celery acceptance was performed. Do not treat a successful build or SQLite migration check as a live deployment check.

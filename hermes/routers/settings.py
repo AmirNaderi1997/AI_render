@@ -17,6 +17,7 @@ class InstagramCredentialsInput(BaseModel):
 
     access_token: str = Field(max_length=4096)
     instagram_user_id: str = Field(max_length=512)
+    app_id: str = Field(max_length=512)
     app_secret: str = Field(max_length=4096)
 
     @field_validator("*")
@@ -39,7 +40,7 @@ class InstagramConnection(InstagramStatus):
 
 async def _status(user_id) -> InstagramStatus:
     stored = await stored_instagram_credentials(user_id)
-    configured = bool(stored.get("access_token"))
+    configured = all(stored.get(field) for field in ("access_token", "instagram_user_id", "app_id", "app_secret"))
     return InstagramStatus(configured=configured, instagram_user_id=stored.get("instagram_user_id") if configured else None)
 
 
@@ -73,7 +74,7 @@ async def delete_instagram_settings(user=Depends(current_user)):
 
 @router.post("/test", response_model=InstagramConnection)
 async def test_instagram_connection(user=Depends(current_user)):
-    """Checks the effective credentials (saved settings, then .env) against the Graph API."""
+    """Checks this user's saved credentials against the Graph API."""
     user_id = str(user.id)
     values = await instagram_credentials(user_id)
     if not values["access_token"] or not values["business_account_id"]:

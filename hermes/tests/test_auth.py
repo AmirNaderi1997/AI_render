@@ -7,9 +7,10 @@ from hermes.services.instagram_api import InstagramAPI
 
 
 def test_connect_callback_encrypt_refresh_and_replay(client, monkeypatch):
-    monkeypatch.setattr(settings, "INSTAGRAM_APP_ID", "123")
-    monkeypatch.setattr(settings, "INSTAGRAM_APP_SECRET", "secret")
     monkeypatch.setattr(settings, "INSTAGRAM_REDIRECT_URI", "http://localhost:8001/api/hermes/auth/callback")
+    assert client.post("/api/hermes/settings/instagram", json={
+        "app_id": "123", "app_secret": "secret", "access_token": "token", "instagram_user_id": "ig-1",
+    }).status_code == 200
     monkeypatch.setattr(InstagramAPI, "exchange_code", AsyncMock(return_value={"access_token": "short", "user_id": "ig-1"}))
     monkeypatch.setattr(InstagramAPI, "long_lived_token", AsyncMock(return_value={"access_token": "long", "expires_in": 3600}))
     monkeypatch.setattr(InstagramAPI, "profile", AsyncMock(return_value={"id": "ig-1", "username": "creator"}))

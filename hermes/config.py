@@ -9,10 +9,6 @@ log = logging.getLogger("uvicorn.error")
 class Settings(BaseSettings):
     DATABASE_URL: str = ""
     REDIS_URL: str = ""
-    INSTAGRAM_APP_ID: str = ""
-    INSTAGRAM_APP_SECRET: str = ""
-    INSTAGRAM_ACCESS_TOKEN: str = ""
-    INSTAGRAM_BUSINESS_ACCOUNT_ID: str = ""
     INSTAGRAM_REDIRECT_URI: str = ""
     JWT_SECRET: str = ""
     ALLOWED_HOSTS: str = ""
@@ -45,16 +41,16 @@ async def stored_instagram_credentials(user_id):
     try:
         return {field: decrypt_setting(value) for field, value in stored.items() if value}
     except HTTPException:
-        log.warning("hermes_settings credentials for user %s cannot be decrypted; falling back to environment", user_id)
+        log.warning("hermes_settings credentials for user %s cannot be decrypted", user_id)
         return {}
 
 
 async def instagram_credentials(user_id):
-    """Resolve Instagram credentials: this user's stored settings first, then .env values."""
+    """Resolve Instagram credentials only from this user's encrypted settings."""
     stored = await stored_instagram_credentials(user_id)
     return {
-        "access_token": stored.get("access_token") or settings.INSTAGRAM_ACCESS_TOKEN.strip(),
-        "app_id": settings.INSTAGRAM_APP_ID.strip(),
-        "app_secret": stored.get("app_secret") or settings.INSTAGRAM_APP_SECRET.strip(),
-        "business_account_id": stored.get("instagram_user_id") or settings.INSTAGRAM_BUSINESS_ACCOUNT_ID.strip(),
+        "access_token": stored.get("access_token", ""),
+        "app_id": stored.get("app_id", ""),
+        "app_secret": stored.get("app_secret", ""),
+        "business_account_id": stored.get("instagram_user_id", ""),
     }
