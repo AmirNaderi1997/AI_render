@@ -28,4 +28,11 @@ The feature history is in [docs/stages.md](docs/stages.md) and [plan.md](plan.md
 - Deployment impact: no schema migration; rebuild app, worker, Hermes, and frontend images. Existing MP4 exports require re-rendering to gain embedded posters. Keep `HERMES_TOKEN_KEY` stable for encrypted data; `INSTAGRAM_REDIRECT_URI` remains server configuration. Users with earlier saved Hermes settings must re-enter all four fields, including App ID.
 - Remaining gate: verify downloaded MP4 in QuickTime and a second player, and verify Hermes settings in an authenticated browser against the deployed stack before announcing release readiness.
 
+## 2026-10-12: Rate poster titles for every generated plan
+
+- Goal: new uploaded-video plans and Content Creator reel, story, and post plans choose their poster title from available captions with the same rating system. The caption text is preserved, including the example selection «سرمایه اولیه اصولا نمی‌خواد».
+- Affected layers: hosted and local fallback planning, Content Creator plan assembly, and poster metadata consumed by the existing render/export path. No API, database schema, frontend, or Compose contract changes.
+- Acceptance evidence: focused brain, provider, and Content Creator run passed locally (97 tests, 15 unrelated media tests deselected); `scripts/check_vps_handoff.py` passed. The logged-in local browser showed job `1d4e7a5585de` with poster text «سرمایه اولیه اصولا نمی‌خواد», score 72, and matching caption 12. The broader Content Creator/transcription run had FFmpeg and transcription fixture failures in this checkout; it does not establish a full-suite pass.
+- Deployment impact: rebuild app and worker images to use the planner change. Existing saved plans are not automatically rewritten; the render path refreshes posters with an older rating version. A fresh generated plan, render, downloaded MP4, and browser preview on the target stack remain to be checked before VPS handoff.
+
 Do not infer deployment readiness from the presence of these documents or from a local build. Update this table only with dated, specific evidence.

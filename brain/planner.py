@@ -788,6 +788,7 @@ def generate_plan_local(
     }, transcript or {"duration": duration})
     if transcript and _trim_incomplete_source_tail(plan_data, transcript):
         _clamp_output_events(plan_data)
+    _apply_poster(plan_data, [])
     return plan_data
 
 
@@ -913,6 +914,7 @@ def generate_plan(
         if (plan_data.get("generation_meta") or {}).get("provider") == "local":
             if _trim_incomplete_source_tail(plan_data, transcript):
                 _clamp_output_events(plan_data)
+            _apply_poster(plan_data, [])
             plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
             if errors:
                 raise ValueError("; ".join(errors))

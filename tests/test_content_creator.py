@@ -533,6 +533,18 @@ def test_post_narration_rejects_unintelligible_speed(tmp_path):
 # ── 8. storyboard_to_plan — reel ────────────────────────────────────────────
 
 class TestStoryboardToPlanReel:
+    def test_rates_cover_title_from_all_scene_captions(self, tmp_path):
+        sb = _make_storyboard("reel")
+        sb.scenes[0].text_overlay = "کدوم رو انتخاب می‌کنید؟"
+        sb.scenes[1].text_overlay = "سرمایه اولیه اصولا نمی‌خواد"
+        media = _make_media(sb, tmp_path)
+
+        plan_data = storyboard_to_plan(sb, media, ContentType.REEL, "stitched.mp4")
+
+        assert plan_data["poster"]["text"] == "سرمایه اولیه اصولا نمی‌خواد"
+        assert plan_data["poster"]["source_caption_index"] == 1
+        assert "cover" not in plan_data
+
     def test_produces_valid_plan(self, tmp_path):
         sb = _make_storyboard("reel")
         media = _make_media(sb, tmp_path)
@@ -540,6 +552,7 @@ class TestStoryboardToPlanReel:
         Path(source).write_bytes(b"\x00" * 100)
         plan_data = storyboard_to_plan(sb, media, ContentType.REEL, source)
         assert "segments" in plan_data
+        assert plan_data["poster"]["text"] in {caption["text"] for caption in plan_data["captions"]}
         assert plan_data["captions"][0]["style"] == "cover"
         assert plan_data["captions"][-1]["style"] == "cta"
         assert "canvas" in plan_data
@@ -566,6 +579,7 @@ class TestStoryboardToPlanPost:
         source = str(media[0]["file_path"])
         plan_data = storyboard_to_plan(sb, media, ContentType.POST, source)
         assert len(plan_data["segments"]) == 1
+        assert plan_data["poster"]["text"] == plan_data["captions"][0]["text"]
         assert plan_data["canvas"]["width"] == 1080
         assert plan_data["canvas"]["height"] == 1080
         plan, errors = validate_plan(plan_data, check_media=False)
@@ -581,6 +595,7 @@ class TestStoryboardToPlanStory:
         source = str(tmp_path / "stitched.mp4")
         Path(source).write_bytes(b"\x00" * 100)
         plan_data = storyboard_to_plan(sb, media, ContentType.STORY, source)
+        assert plan_data["poster"]["text"] in {caption["text"] for caption in plan_data["captions"]}
         plan, errors = validate_plan(plan_data, check_media=False)
         assert errors == [], f"Validation errors: {errors}"
 

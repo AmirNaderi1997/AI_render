@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
 
 from brain.silence import word_gap_ranges, merge_ranges, _invert, detect_pauses
 from brain.planner import (
-    source_to_output_time, output_to_source_time, generate_plan, _caption_review,
+    source_to_output_time, output_to_source_time, generate_plan, generate_plan_local, _caption_review,
     _ensure_visual_effects, _apply_poster, _enforce_selected_effect,
     refresh_stale_poster_rating, POSTER_RATING_VERSION,
 )
@@ -295,6 +296,31 @@ def test_poster_uses_transition_aware_segment_timing():
     assert "cover" not in plan
     assert plan["poster"]["source_caption_index"] == 1
     assert plan["poster"]["frame_time"] == 4.0
+
+
+def test_local_plan_rates_poster_from_transcript(tmp_path):
+    words = [
+        ("کدوم", 0.0), ("رو", 0.4), ("انتخاب", 0.8), ("می‌کنید؟", 1.2),
+        ("سرمایه", 3.0), ("اولیه", 3.4), ("اصولا", 3.8), ("نمی‌خواد", 4.2),
+    ]
+    transcript = {"duration": 6.0, "sentences": [], "words": [
+        {"w": word, "start": start, "end": start + 0.3} for word, start in words
+    ]}
+    job = SimpleNamespace(dir=tmp_path, raw_name="clip.mp4")
+
+    direct = generate_plan_local(job, duration=6.0, transcript=transcript)
+    assert direct["poster"]["text"] == "سرمایه اولیه اصولا نمی‌خواد"
+    assert direct["poster"]["source_caption_index"] == 1
+    assert direct["poster"]["rating_version"] == POSTER_RATING_VERSION
+
+    from brain.ai_provider import LocalFallbackProvider
+    with patch("brain.planner.get_provider", return_value=LocalFallbackProvider()):
+        fallback, _ = generate_plan(
+            job_dir=tmp_path, transcript=transcript,
+            keep_ranges=[(0.0, 6.0)], remove_ranges=[], source_rel="raw/clip.mp4",
+        )
+    assert fallback["poster"]["text"] == direct["poster"]["text"]
+    assert fallback["poster"]["source_caption_index"] == 1
 
 
 def test_planner_retries_on_invalid(tmp_path):

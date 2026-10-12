@@ -901,6 +901,8 @@ def storyboard_to_plan(
         },
     }
 
+    from brain.planner import _apply_poster
+    _apply_poster(plan, [])
     return plan
 
 
