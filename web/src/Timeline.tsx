@@ -77,10 +77,8 @@ export function Timeline({ plan, onSeek }: { plan: any; onSeek: (t: number) => v
           Math.max(0, incoming.start), Math.max(incoming.start + duration, incoming.start + 0.02),
           transition.type, () => seek(incoming.start));
       }))}
-      {lane("Cover", plan.cover
-        ? [box("c-cap", plan.cover.start || 0, plan.cover.end || 2.5,
-            plan.cover.text, () => seek(plan.cover.start || 0))]
-        : [])}
+      {plan.cover && lane("Opening title", [box("c-cap", plan.cover.start || 0, plan.cover.end || 2.5,
+        plan.cover.text, () => seek(plan.cover.start || 0))])}
       {lane("Captions", (plan.captions || []).map((c: any) =>
         box("c-cap", c.start, c.end, c.text, () => seek(c.start))
       ))}

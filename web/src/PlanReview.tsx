@@ -816,8 +816,8 @@ function VisualEditor({ jobId, plan, effects, onEffectChange, onUpdate, onDelete
 
   return (
     <div className="visual-editor">
-      <h3>Cover title</h3>
-      {plan.cover ? (
+      {plan.cover && <>
+        <h3>Opening title overlay</h3>
         <div className="ve-item" role="group" tabIndex={0} aria-label="Seek to cover title"
           onClick={() => onSeekOutput(plan.cover.start || 0)}
           onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSeekOutput(plan.cover.start || 0); } }}>
@@ -832,16 +832,16 @@ function VisualEditor({ jobId, plan, effects, onEffectChange, onUpdate, onDelete
           </span>
           {plan.cover.reason && <span className="muted" style={{ fontSize: 11 }}>{plan.cover.reason}</span>}
         </div>
-      ) : <p className="muted">No cover title selected.</p>}
+      </>}
 
-      <h3>Poster text</h3>
+      <h3>Preplay video title</h3>
       {plan.poster ? (
         <div className="ve-item">
           <span className="ve-style ve-emphasis">poster</span>
           <input type="text" value={plan.poster.text || ""}
             aria-label="Poster text"
             onChange={e => onUpdate(["poster", "text"], e.target.value)} />
-          <span className="muted">frame at {(plan.poster.frame_time || 0).toFixed(2)}s</span>
+          <span className="muted">Selected from the video at {(plan.poster.frame_time || 0).toFixed(2)}s; embedded in the MP4 opening frame when rendered.</span>
           {plan.poster.reason && <span className="muted" style={{ fontSize: 11 }}>{plan.poster.reason}</span>}
         </div>
       ) : <p className="muted">No poster text selected.</p>}
