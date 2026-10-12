@@ -762,6 +762,7 @@ def _run_generate(
                 preset_name=style,
                 instruction=instruction,
                 caption_font=caption_font,
+                caption_font_id=caption_font_id,
                 style_profile=style_profile,
                 style_ref=style_ref,
                 learned_profile=learned_profile,

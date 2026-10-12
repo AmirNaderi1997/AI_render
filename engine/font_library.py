@@ -112,6 +112,70 @@ def list_library() -> dict[str, Any]:
             "approved": [entry for entry in data["approved"] if not entry.get("archived_at")]}
 
 
+def planner_font_options(persian: bool = False) -> list[dict[str, str]]:
+    """List real, renderable project fonts that the planner may select.
+
+    Bundled font names come from the font files themselves. Approved library
+    fonts are included by stable id so the model cannot invent font families.
+    """
+    options: list[dict[str, str]] = []
+    bundled_dir = PROJECT_ROOT / "presets" / "fonts"
+    seen: set[tuple[str, str | None]] = set()
+    for path in sorted(bundled_dir.rglob("*")):
+        if path.suffix.lower() not in {".ttf", ".otf", ".ttc"}:
+            continue
+        try:
+            metadata = _font_metadata(path)
+        except (RuntimeError, ValueError):
+            continue
+        if persian and not metadata["persian_coverage"]["supported"]:
+            continue
+        family = metadata["family"]
+        if family.casefold() == "ray":
+            from .captions import render_font_family
+            family = render_font_family(path.stem)
+        key = (family, None)
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append({"family": family, "style": metadata["style"]})
+
+    for entry in list_library()["approved"]:
+        if entry.get("kind") != "font_file":
+            continue
+        metadata = entry.get("metadata") or {}
+        if persian and not metadata.get("persian_coverage", {}).get("supported", False):
+            continue
+        key = (str(entry.get("family", "")), str(entry.get("id", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append({"family": key[0], "style": str(entry.get("style", "Regular")),
+                        "caption_font_id": key[1]})
+    return options
+
+
+def render_font_path(canvas) -> Path | None:
+    """Resolve the selected family to a file so renderers load its glyphs."""
+    if canvas.caption_font_id:
+        return Path(resolve_font(canvas.caption_font_id)["path"])
+    family = canvas.caption_font
+    if not family:
+        return None
+    from .captions import render_font_family
+    for path in sorted((PROJECT_ROOT / "presets" / "fonts").rglob("*")):
+        if path.suffix.lower() not in {".ttf", ".otf", ".ttc"}:
+            continue
+        try:
+            metadata_family = _font_metadata(path)["family"]
+            face_family = render_font_family(path.stem) if metadata_family.casefold() == "ray" else metadata_family
+            if face_family.casefold() == family.casefold():
+                return path.resolve()
+        except (RuntimeError, ValueError):
+            continue
+    return None
+
+
 def list_approved_files() -> list[Path]:
     data = _read()
     result = []

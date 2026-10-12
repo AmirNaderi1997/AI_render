@@ -130,15 +130,35 @@ def build_ass(plan: Plan, style: dict) -> str:
             s["font"] = render_font_family(selected_font)
         def scaled(key: str, default: int) -> int:
             return max(0, int(round(float(s.get(key, default)) * scale)))
+        background = s.get("background_colour", "#00000000")
+        background_alpha = background.lstrip("#")[6:8] if len(background.lstrip("#")) == 8 else "00"
+        border_style = int(s.get("ass_border_style", 3 if background_alpha.upper() != "00" else 1))
+        outline_size = scaled("outline", 6)
+        if border_style == 3:
+            # ASS uses the outline field as padding when BorderStyle is 3.
+            outline_size = scaled("box_padding", 10)
         lines.append(
             f"Style: {name},{s.get('font', 'Arial')},{max(1, scaled('size', 78))},"
             f"{ass_colour(s.get('colour', '#FFFFFF'))},&H000000FF,{ass_colour(s.get('outline_colour', '#000000'))},"
-            f"&H80000000,{-1 if s.get('bold', True) else 0},0,0,0,100,100,0,0,1,"
-            f"{scaled('outline', 6)},{scaled('shadow', 0)},2,{scaled('margin_sides', 60)},"
+            f"{ass_colour(background)},{-1 if s.get('bold', True) else 0},0,0,0,100,100,0,0,{border_style},"
+            f"{outline_size},{scaled('shadow', 0)},2,{scaled('margin_sides', 60)},"
             f"{scaled('margin_sides', 60)},{scaled('margin_bottom', 520)},1")
     lines += ["", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
+    highlight_colour = cap.get("highlight_colour", "#FFD43B")
     for c in plan.captions:
-        lines.append(f"Dialogue: 0,{ass_time(c.start)},{ass_time(c.end)},{c.style},,0,0,0,,{ass_text(c.text)}")
+        text = ass_text(c.text)
+        if c.highlighted_word:
+            start = c.text.find(c.highlighted_word)
+            if start >= 0:
+                end = start + len(c.highlighted_word)
+                text = (
+                    ass_text(c.text[:start])
+                    + "{\\c" + ass_colour(highlight_colour) + "\\b1}"
+                    + ass_text(c.text[start:end])
+                    + "{\\r" + c.style + "}"
+                    + ass_text(c.text[end:])
+                )
+        lines.append(f"Dialogue: 0,{ass_time(c.start)},{ass_time(c.end)},{c.style},,0,0,0,,{text}")
     if plan.cover:
         lines.append(
             f"Dialogue: 1,{ass_time(plan.cover.start)},{ass_time(plan.cover.end)},cover,,0,0,0,,"

@@ -27,6 +27,7 @@ rafiei_style:
     font: "RAY-MEDIUM"
     show_on_intro: true
 captions:
+  highlight_colour: "#FFD43B"
   fonts_dir: presets/fonts
   persian_font: "Ray ExtraBlack"   # default for Persian captions
   base:
@@ -44,13 +45,12 @@ captions:
   styles:
     normal: {}
     emphasis:
-      # Keep the subtitle feed visually stable. The previous whole-line gold
-      # treatment looked like the subtitle colour was changing mid-video.
+      # Emphasis captions are larger while the selected spoken word gets the accent color.
       colour: "#FFFFFF"
-      size: 54
+      size: 120
     cta:
       colour: "#FFD43B"
-      size: 54
+      size: 62
     cover:
       colour: "#FFFFFF"
       size: 84

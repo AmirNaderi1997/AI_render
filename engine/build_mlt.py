@@ -5,6 +5,9 @@ Faithful refactor of proof/build_mlt.py. All media paths become absolute in the 
 from __future__ import annotations
 from pathlib import Path
 from math import gcd
+import logging
+import shutil
+import subprocess
 from typing import Optional
 from xml.sax.saxutils import escape as esc
 
@@ -23,6 +26,8 @@ from .captions import (
     write_srts,
 )
 
+log = logging.getLogger(__name__)
+
 
 def _split_cover_title(text: str, min_words: int = 4) -> tuple[str, Optional[str]]:
     """Split a short Persian hook into a setup line and a punch line."""
@@ -31,6 +36,21 @@ def _split_cover_title(text: str, min_words: int = 4) -> tuple[str, Optional[str
         return text, None
     pivot = (len(words) + 1) // 2
     return " ".join(words[:pivot]), " ".join(words[pivot:])
+
+
+def _mlt_supports_ass_subtitles() -> bool:
+    """Check whether this MLT install has the libass-backed subtitle filter."""
+    melt = shutil.which("melt") or shutil.which("melt-7")
+    if not melt:
+        return False
+    try:
+        result = subprocess.run(
+            [melt, "-query", "filter=avfilter.subtitles"],
+            capture_output=True, text=True, timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "identifier: avfilter.subtitles" in result.stdout
 
 
 def _rect(z: float, W: int, H: int) -> str:
@@ -158,6 +178,9 @@ def build(
     from .font_library import family_for_plan, stage_for_job
     selected_font = family_for_plan(plan.canvas)
     font_asset = stage_for_job(plan.canvas.caption_font_id, out_dir) if plan.canvas.caption_font_id else None
+    from .font_library import render_font_path
+    selected_font_file = (Path(font_asset["job_path"]) if font_asset
+                          else render_font_path(plan.canvas))
     if selected_font:
         cap_base["font"] = render_font_family(selected_font)
 
@@ -186,6 +209,10 @@ def build(
             f'<property name="ai-render:caption_font_relative_path">{esc(font_asset["job_relative_path"])}</property>',
             '<property name="ai-render:captions_ass">captions.ass</property>',
         ])
+    elif selected_font_file:
+        x.append(
+            f'<property name="ai-render:caption_font_file">{esc(str(selected_font_file))}</property>'
+        )
 
     # Filter B-roll to entries whose file actually exists on disk
     valid_broll = [(i, b) for i, b in enumerate(plan.broll)
@@ -543,17 +570,24 @@ def build(
                 f'<property name="always_active">1</property><property name="sum">1</property>'
                 f'</transition>'
             )
-    # Captions: one MLT `subtitle` filter per style used. MLT's built-in filter
-    # renders SRT with per-filter font/colour/size properties. This avoids the
-    # avfilter.subtitles path, which needs an ffmpeg built with libass.
+    # Use libass when the plan contains word-level color runs: the built-in
+    # MLT subtitle filter only accepts one foreground color for a whole cue.
+    # Keep the established SRT path on MLT installs without libass.
+    rich_captions = any(c.highlighted_word for c in plan.captions)
+    use_ass_captions = rich_captions and _mlt_supports_ass_subtitles()
+    if rich_captions and not use_ass_captions:
+        log.warning(
+            "plan contains highlighted caption words, but this MLT build lacks libass; "
+            "export will use the single-colour SRT fallback"
+        )
     layers = [
         (i, name, None, srt)
         for i, name in enumerate(STYLE_NAMES)
-        if not (name == "cover" and cover_parts)
+        if not use_ass_captions and not (name == "cover" and cover_parts)
         for srt in [srt_paths.get(name)]
         if srt is not None
     ]
-    if cover_parts:
+    if not use_ass_captions and cover_parts:
         layers.extend([
             (len(STYLE_NAMES) - 1, "cover", "primary", cover_parts["primary"]),
             (len(STYLE_NAMES), "cover", "accent", cover_parts["accent"]),
@@ -561,6 +595,22 @@ def build(
     for offset, variant in enumerate(("primary", "accent"), len(STYLE_NAMES) + 1):
         if variant in headline_parts:
             layers.append((offset, "headline", f"headline_{variant}", headline_parts[variant]))
+    if use_ass_captions:
+        font_dir = selected_font_file.parent if selected_font_file else None
+        preset_font_dir = style.get("captions", {}).get("fonts_dir")
+        if not font_dir and preset_font_dir:
+            candidate = Path(preset_font_dir)
+            if not candidate.is_absolute():
+                candidate = PROJECT_ROOT / candidate
+            if candidate.is_dir():
+                font_dir = candidate.resolve()
+        x.append(
+            '<filter mlt_service="avfilter.subtitles">'
+            f'<property name="av.filename">{esc(str(ass_path.resolve()))}</property>'
+            + (f'<property name="av.fontsdir">{esc(str(font_dir))}</property>'
+               if font_dir else "")
+            + '</filter>'
+        )
     for feed_idx, name, variant, srt in layers:
         s = {**cap_base, **(cap_styles.get(name) or {})}
         if selected_font:

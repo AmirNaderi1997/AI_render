@@ -52,12 +52,24 @@ def _is_persian(lang: str) -> bool:
     return lang.lower().strip() in _PERSIAN_CODES
 
 
-def _build_system_prompt(preset: dict, language: str = "en", analyses: Optional[list[dict]] = None) -> str:
+def _build_system_prompt(preset: dict, language: str = "en", analyses: Optional[list[dict]] = None,
+                        font_options: Optional[list[dict[str, str]]] = None) -> str:
     persian = _is_persian(language)
+    font_lines = "\n".join(
+        "  - " + json.dumps(option, ensure_ascii=False)
+        for option in (font_options or [])
+    )
+    font_rule = (
+        "\n- Select canvas.caption_font or canvas.caption_font_id from the actual available fonts below. "
+        "Choose a legible font and weight for this content's tone (for example, bold geometric for energetic "
+        "claims, a clean neutral face for instructional speech, and a restrained display face only when the "
+        "content supports it). Use transcript and content cues; do not invent names or trade readability for novelty.\n"
+        f"Available fonts:\n{font_lines}"
+    ) if font_lines else ""
     caption_lang_rule = (
         "\n- IMPORTANT: The video language is Persian (Farsi). Write ALL captions in Persian script "
         "(right-to-left, joined letters). Do NOT translate to English. "
-        "Use Vazirmatn font. Each caption must be authentic Persian text from the transcript."
+        "Each caption must be authentic Persian text from the transcript. Choose only a listed font with Persian coverage."
         if persian else ""
     )
 
@@ -95,7 +107,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 {{
   "version": "0.3",
   "style": "rafiei_reel",
-  "canvas": {{"width": 1080, "height": 1920, "fps": 30}},
+  "canvas": {{"width": 1080, "height": 1920, "fps": 30, "caption_font": "<listed family>", "caption_font_id": "<listed id when selecting an approved font>"}},
   "source": "<relative path to raw video>",
   "segments": [
     {{"id": "s1", "in": <source_start_sec>, "out": <source_end_sec>,
@@ -112,7 +124,7 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
   ],
   "captions": [
     {{"start": <output_timeline_sec>, "end": <output_timeline_sec>,
-      "text": "<2-5 words>", "style": "normal|emphasis|cta"}}
+      "text": "<2-5 words>", "style": "normal|emphasis|cta", "highlighted_word": "<exact word or phrase from text>"}}
   ],
   "broll": [
     {{"at": <output_timeline_sec>, "duration": <sec>, "file": "<existing B-roll file path>",
@@ -131,8 +143,9 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
 - Max seconds without a cut, visual change, or B-roll: {preset.get("editing", {}).get("max_static_sec", 4.0)}
 {effect_block}
 - The legacy segment.zoom field is retained for older plans; typed visual_effects take precedence.
-- Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each{caption_lang_rule}
+- Caption length: {preset.get("captions", {}).get("min_words", 2)}-{preset.get("captions", {}).get("max_words", 5)} words each{caption_lang_rule}{font_rule}
 - Mark one emphasis caption per key point, one CTA caption at the end
+- Mark at most one short, exact, high-information word or phrase in each caption as highlighted_word. Prefer a concrete benefit, result, warning, or action; use JSON null when no word deserves emphasis. Never add words that were not spoken. The renderer will color this text with the style accent color.
 - B-roll: ~{preset.get("broll", {}).get("default_duration_sec", 2.0)}s each, minimum {preset.get("broll", {}).get("min_gap_sec", 8.0)}s apart
 - B-roll file paths must refer to existing media; never use a placeholder or invented path. If no real asset is available, omit that B-roll item.
 - Place a whoosh SFX on each cut into B-roll
@@ -803,6 +816,7 @@ def generate_plan(
     preset_name: str = "rafiei_reel",
     instruction: str = "",
     caption_font: Optional[str] = None,
+    caption_font_id: Optional[str] = None,
     style_profile: Optional[dict] = None,
     style_ref: Optional[dict] = None,
     learned_profile: Optional[dict] = None,
@@ -847,7 +861,14 @@ def generate_plan(
     lang = transcript.get("language", "en")
 
     # Pass no analyses yet — LLM produces layout + segments first, effects second
-    system_prompt = _build_system_prompt(preset, language=lang, analyses=None)
+    try:
+        from engine.font_library import planner_font_options
+        font_options = planner_font_options(persian=_is_persian(lang))
+    except Exception as exc:
+        log.warning("caption font inventory unavailable: %s", exc)
+        font_options = []
+    system_prompt = _build_system_prompt(preset, language=lang, analyses=None,
+                                         font_options=font_options)
 
     # Stage 5: append few-shot examples from learned style
     if learned_few_shot:
@@ -877,6 +898,7 @@ def generate_plan(
         "preset_name": preset_name,
         "output_kind": output_kind,
         "caption_font": caption_font,
+        "caption_font_id": caption_font_id,
         "transition_style": transition_style,
         "transition_request": transition_request,
         "style_ref": style_ref,
@@ -976,6 +998,11 @@ def generate_plan(
         _apply_poster(plan_data, analyses)
         if caption_font:
             plan_data.setdefault("canvas", {})["caption_font"] = caption_font
+        if caption_font_id:
+            from engine.font_library import resolve_font
+            selected_font = resolve_font(caption_font_id)
+            plan_data.setdefault("canvas", {})["caption_font_id"] = caption_font_id
+            plan_data["canvas"]["caption_font"] = selected_font["family"]
         if style_ref:
             plan_data["style_profile"] = dict(style_ref)
         plan_data.setdefault("style", preset_name)

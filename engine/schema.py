@@ -117,6 +117,9 @@ class Caption(BaseModel):
     text: str
     style: CaptionStyle = "normal"
     position: Literal["bottom", "top"] = "bottom"
+    # A single exact word or short phrase from the caption to accent in the
+    # rich subtitle renderer. None keeps the caption as a single colour.
+    highlighted_word: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self):
@@ -130,6 +133,22 @@ class Caption(BaseModel):
         if not value.strip():
             raise ValueError("caption text must not be empty")
         return value
+
+    @field_validator("highlighted_word")
+    @classmethod
+    def _valid_highlight(cls, value: Optional[str], info):
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _highlight_is_in_caption(self):
+        if self.highlighted_word and self.highlighted_word not in self.text:
+            raise ValueError("highlighted_word must appear exactly in caption text")
+        return self
 
 
 class Cover(BaseModel):
