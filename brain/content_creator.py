@@ -51,16 +51,16 @@ def _voice_provider() -> str:
         "CONTENT_TTS_PROVIDER", settings.CONTENT_TTS_PROVIDER
     ).strip().lower()
     if content_tts:
-        if content_tts not in ("azure", "edge-tts", "elevenlabs", "disabled"):
+        if content_tts not in ("sarovi", "azure", "edge-tts", "elevenlabs", "disabled"):
             raise ValueError(
-                "CONTENT_TTS_PROVIDER must be azure, edge-tts, elevenlabs, or disabled"
+                "CONTENT_TTS_PROVIDER must be sarovi, azure, edge-tts, elevenlabs, or disabled"
             )
         return content_tts
     # TTS_PROVIDER is the current explicit narration contract. Keep an
     # explicitly configured legacy Sarovi route working until it is migrated.
     configured_tts = os.environ.get("TTS_PROVIDER", settings.TTS_PROVIDER).strip().lower()
-    if configured_tts not in ("azure", "edge-tts", "elevenlabs", "disabled"):
-        raise ValueError("TTS_PROVIDER must be azure, edge-tts, elevenlabs, or disabled")
+    if configured_tts not in ("sarovi", "azure", "edge-tts", "elevenlabs", "disabled"):
+        raise ValueError("TTS_PROVIDER must be sarovi, azure, edge-tts, elevenlabs, or disabled")
     if os.environ.get("TTS_PROVIDER") is not None:
         return configured_tts
     configured = os.environ.get("CONTENT_VOICE_PROVIDER", settings.CONTENT_VOICE_PROVIDER).strip().lower()
@@ -318,7 +318,11 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
         warnings: list[str] = []
         voice_provider = _voice_provider()
         if voice_provider == "sarovi":
-            voice_settings = f"{settings.SAROVI_TTS_MODEL}:{settings.SAROVI_TTS_VOICE}"
+            voice_settings = ":".join((
+                os.environ.get("SAROVI_TTS_MODEL", "google/gemini-3.8-flash-tts"),
+                os.environ.get("SAROVI_TTS_VOICE", "Sulafat"),
+                os.environ.get("SAROVI_TTS_INSTRUCTIONS", ""),
+            ))
         elif voice_provider == "azure":
             # Include fallback voice and credential availability so prior audio
             # is not reused after Azure becomes available.
@@ -397,12 +401,15 @@ def _run_generation(job_id: str, provider_name: str, *, raise_errors: bool = Fal
                                         "Set ELEVENLABS_VOICE_ID or "
                                         "CONTENT_TTS_ELEVENLABS_VOICE_EN for English content."
                                     )
-                            tts_result = generate_narration(
-                                scene.narration_text,
-                                gen_dir,
-                                provider=voice_provider,
-                                **voice_kwargs,
-                            )
+                            if voice_provider == "sarovi":
+                                tts_result = generate_narration(scene.narration_text, gen_dir)
+                            else:
+                                tts_result = generate_narration(
+                                    scene.narration_text,
+                                    gen_dir,
+                                    provider=voice_provider,
+                                    **voice_kwargs,
+                                )
                             record = {
                                 "scene_index": scene.index,
                                 "file_path": tts_result.file_path,

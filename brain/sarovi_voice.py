@@ -13,8 +13,9 @@ from pathlib import Path
 from .tts import TTSResult, _get_audio_duration
 
 ENDPOINT = "https://api.sarovi.ir/v1/studio/audio"
-DEFAULT_MODEL = "google/gemini-3.1-flash-tts-preview"
-DEFAULT_VOICE = "Aoede"
+DEFAULT_MODEL = "google/gemini-3.8-flash-tts"
+DEFAULT_VOICE = "Sulafat"
+DEFAULT_INSTRUCTIONS = "فارسی معیار ایران، با تلفظ طبیعی و روان، لحن گرم و حرفه‌ای، بدون لهجهٔ غیرفارسی"
 MAX_AUDIO_BYTES = 25_000_000
 
 
@@ -26,7 +27,10 @@ def generate_narration(text: str, output_dir: Path) -> TTSResult:
         raise ValueError("Narration must contain 1 to 12000 characters")
     model = os.getenv("SAROVI_TTS_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     voice = os.getenv("SAROVI_TTS_VOICE", DEFAULT_VOICE).strip() or DEFAULT_VOICE
+    instructions = os.getenv("SAROVI_TTS_INSTRUCTIONS", DEFAULT_INSTRUCTIONS).strip()
     payload = {"model": model, "text": text.strip(), "voice": voice, "format": "wav"}
+    if instructions:
+        payload["instructions"] = instructions
     request = urllib.request.Request(
         ENDPOINT,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
