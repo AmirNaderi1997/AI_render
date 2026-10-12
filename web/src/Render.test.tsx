@@ -68,7 +68,7 @@ describe("Render polling", () => {
     expect(denoiseStatus).toHaveBeenCalledTimes(settledCalls);
   });
 
-  it("uses the rendered poster as the video's pre-play frame without a separate preview", async () => {
+  it("uses the MP4 opening frame for pre-play without a separate poster image", async () => {
     vi.spyOn(api, "renderStatus").mockResolvedValue({
       ...renderResponse("done"), output: "v2_preview.mp4",
     });
@@ -80,8 +80,9 @@ describe("Render polling", () => {
 
     mountRender();
 
-    const video = await screen.findByLabelText("Video preview with poster: The selected hook");
-    expect(video).toHaveAttribute("poster", expect.stringContaining("v2_preview_poster.jpg"));
+    const video = await screen.findByLabelText("Video preview with embedded poster: The selected hook");
+    expect(video).not.toHaveAttribute("poster");
+    expect(video).toHaveAttribute("preload", "auto");
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.queryByText("Poster Preview")).not.toBeInTheDocument();
   });

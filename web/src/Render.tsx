@@ -468,10 +468,8 @@ export default function Render() {
           <AuthenticatedMedia
             as="video"
             src={api.exportUrl(id, s.output)}
-            posterSrc={plan?.poster?.text
-              ? api.exportUrl(id, s.output.replace(/\.mp4$/i, "_poster.jpg"))
-              : undefined}
-            aria-label={plan?.poster?.text ? `Video preview with poster: ${plan.poster.text}` : "Video preview"}
+            preload="auto"
+            aria-label={plan?.poster?.text ? `Video preview with embedded poster: ${plan.poster.text}` : "Video preview"}
             controls
           />
           <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
