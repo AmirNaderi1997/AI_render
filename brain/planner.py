@@ -146,6 +146,8 @@ Output a single JSON object matching the Edit Plan schema below. No markdown, no
    "بزن رکورد", "ضبط کردی؟", counting takes, crew coordination).
   These are NOT the speaker's message — cut them from the final edit.
 - Remove pauses already identified in the remove_ranges
+- Finish the edit on a complete sentence. If the source recording ends during
+  an unfinished thought, omit that trailing thought instead of ending mid-speech.
 - Segments use SOURCE timeline times (in/out refer to the raw video)
 - Captions and B-roll use OUTPUT timeline times (after cuts/removals)
 - The output timeline is the concatenation of kept segments in order
@@ -784,6 +786,8 @@ def generate_plan_local(
         "transition_request": transition_request,
         "style_ref": style_ref,
     }, transcript or {"duration": duration})
+    if transcript and _trim_incomplete_source_tail(plan_data, transcript):
+        _clamp_output_events(plan_data)
     return plan_data
 
 
@@ -907,6 +911,8 @@ def generate_plan(
         # local plan used by the no-key path. Do not decorate it with hosted
         # analysis calls; it must remain a predictable zero-network fallback.
         if (plan_data.get("generation_meta") or {}).get("provider") == "local":
+            if _trim_incomplete_source_tail(plan_data, transcript):
+                _clamp_output_events(plan_data)
             plan, errors = validate_plan(plan_data, base_dir=job_dir, check_media=False)
             if errors:
                 raise ValueError("; ".join(errors))
@@ -914,6 +920,7 @@ def generate_plan(
 
         # Clamp segment.out to source duration so renders never exceed it
         _clamp_segments(plan_data, job_dir, source_rel)
+        _trim_incomplete_source_tail(plan_data, transcript)
 
         # --- Smarter effect selection (V2) ---
         segments = plan_data.get("segments", [])
@@ -1051,6 +1058,55 @@ def _clamp_segments(plan_data: dict, job_dir: Path, source_rel: str) -> None:
             seg["in"] = round(src_dur, 6)
 
 
+def _trim_incomplete_source_tail(plan_data: dict, transcript: dict) -> bool:
+    """Omit a source-truncated final thought when a completed sentence precedes it.
+
+    Only act when both the last recognized word and the unfinished sentence
+    reach the recording's end. A deliberate edit that already stops earlier is
+    left alone. This does not try to repair missing speech in the source.
+    """
+    sentences = transcript.get("sentences") or []
+    words = transcript.get("words") or []
+    segments = plan_data.get("segments") or []
+    duration = float(transcript.get("duration") or 0)
+    if len(sentences) < 2 or not words or not segments or duration <= 0:
+        return False
+    last = sentences[-1]
+    text = str(last.get("text") or "").rstrip(" \t\n\r\"'»”")
+    if not text or text.endswith((".", "!", "?", "؟", "۔")):
+        return False
+    if abs(duration - float(last.get("end") or 0)) > 0.15 or abs(duration - float(words[-1].get("end") or 0)) > 0.15:
+        return False
+    if float(segments[-1]["out"]) < float(last.get("start") or 0) + 0.15:
+        return False
+    previous = sentences[-2]
+    previous_text = str(previous.get("text") or "").rstrip(" \t\n\r\"'»”")
+    if not previous_text.endswith((".", "!", "?", "؟", "۔")):
+        return False
+    cut_at = float(previous.get("end") or 0)
+    fps = int((plan_data.get("canvas") or {}).get("fps", 30))
+    if fps <= 0 or cut_at <= 0 or cut_at > float(last.get("start") or 0):
+        return False
+    kept = []
+    for segment in segments:
+        if float(segment["in"]) >= cut_at - 1 / fps:
+            break
+        item = dict(segment)
+        item["out"] = min(float(item["out"]), cut_at)
+        if round((item["out"] - float(item["in"])) * fps) >= 1:
+            kept.append(item)
+    if not kept or kept[-1]["out"] >= segments[-1]["out"]:
+        return False
+    plan_data["segments"] = kept
+    ids = {segment["id"] for segment in kept}
+    plan_data["visual_effects"] = [effect for effect in plan_data.get("visual_effects", [])
+                                   if effect.get("segment_id") in ids]
+    if (plan_data.get("cover") or {}).get("source_segment_id") not in ids:
+        plan_data.pop("cover", None)
+    log.info("trimmed source-truncated final thought at %.3fs", cut_at)
+    return True
+
+
 def _clamp_output_events(plan_data: dict) -> None:
     """Trim model output events to the duration of its kept source segments."""
     fps = int((plan_data.get("canvas") or {}).get("fps", 30))
@@ -1074,13 +1130,10 @@ def _clamp_output_events(plan_data: dict) -> None:
             if duck["end"] > duck["start"]:
                 ducks.append(duck)
         plan_data["music"]["duck"] = ducks
-    for broll in plan_data.get("broll", []):
-        if broll["at"] >= duration:
-            broll["at"] = round(max(0.0, duration - 0.1), 3)
+    plan_data["broll"] = [item for item in plan_data.get("broll", []) if item["at"] < duration]
+    for broll in plan_data["broll"]:
         broll["duration"] = round(max(0.001, min(broll["duration"], duration - broll["at"])), 3)
-    for sfx in plan_data.get("sfx", []):
-        if sfx["at"] > duration:
-            sfx["at"] = round(max(0.0, duration - 0.001), 3)
+    plan_data["sfx"] = [item for item in plan_data.get("sfx", []) if item["at"] < duration]
 
 
 def _check_media_soft(plan_data: dict, job_dir: Path) -> list[str]:

@@ -18,5 +18,6 @@ The feature history is in [docs/stages.md](docs/stages.md) and [plan.md](plan.md
 | Data safety | Restorable PostgreSQL backup, migration review, storage durability | Not proven on VPS in this repository |
 | Runtime | Compose services, DB/Redis/worker readiness, HTTPS, logs | Not proven on VPS in this repository |
 | User acceptance | Real login, upload, render, export, Hermes flow as applicable in browser | Not proven on VPS in this repository |
+| Hermes credential entry | Users enter their Instagram credentials in the Hermes section of the site; remove the existing environment fallback before treating that policy as enforced | Pending; current code still accepts environment values |
 
 Do not infer deployment readiness from the presence of these documents or from a local build. Update this table only with dated, specific evidence.
