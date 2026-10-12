@@ -1,0 +1,13 @@
+---
+description: Require project planning and building to maintain the VPS handoff artifacts
+alwaysApply: true
+---
+
+# Plan, build, and VPS handoff
+
+For project feature work or VPS preparation, read `SKILLS.md`, `Prompts/README.md`, `RoadMap.md`, and `GuideLine.md` before planning or changing code. Follow their links to the relevant detailed documents.
+
+- During planning, record the goal, affected layers, acceptance evidence, and deployment impact in `RoadMap.md` or a linked scoped plan. Update the skill map and prompt template when the work adds a capability or changes an agent contract.
+- During building, implement and verify the affected backend, frontend, database, worker, and Docker paths where applicable. Record actual results and unresolved gates; do not call source or local build checks VPS proof.
+- Before handing the project to the VPS, complete the checklist in `GuideLine.md`. The deploy scripts check that all four handoff artifacts are present and nonempty. A passing file check does not replace the release evidence or authorize a deployment.
+- Keep secrets and live data out of these tracked documents. Preserve unrelated working tree changes.

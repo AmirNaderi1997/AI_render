@@ -86,7 +86,12 @@ def _generate_elevenlabs(
             f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
             headers={"xi-api-key": api_key, "accept": "audio/mpeg"},
             json={"text": text, "model_id": model_id},
-            timeout=_ELEVENLABS_TIMEOUT_SECONDS,
+            # Short connect timeout to fail fast, longer read timeout because
+            # ElevenLabs only responds after synthesizing the whole clip.
+            timeout=httpx.Timeout(
+                float(os.environ.get("ELEVENLABS_READ_TIMEOUT", "60")),
+                connect=float(os.environ.get("ELEVENLABS_CONNECT_TIMEOUT", _ELEVENLABS_TIMEOUT_SECONDS)),
+            ),
         )
         response.raise_for_status()
         Path(output_path).write_bytes(response.content)

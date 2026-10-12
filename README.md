@@ -79,6 +79,8 @@ Tests that need `melt` are skipped automatically if it is not on PATH (the run t
 
 ## Repo layout
 
+Planning and VPS handoff use [SKILLS.md](SKILLS.md), [Prompts/README.md](Prompts/README.md), [RoadMap.md](RoadMap.md), and [GuideLine.md](GuideLine.md). Both deployment scripts check that these files are present before starting.
+
 ```
 engine/    schema.py build_mlt.py captions.py render.py probe.py premiere.py
            effects.py (100-preset catalog) effects_v4.py (V4 effects, My Effects) __main__.py

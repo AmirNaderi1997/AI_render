@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.production.yml)
 
+python3 scripts/check_vps_handoff.py
+
 if [[ ! -f .env ]]; then
   echo "ERROR: .env is missing. Copy .env.example and configure production values." >&2
   exit 1
