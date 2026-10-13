@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from sqlalchemy import func, select
 
-from app.database import AsyncSessionLocal, DB_AVAILABLE
+from app.database import AsyncSessionLocal
 from app.models import PlanVersion
 
 if TYPE_CHECKING:
@@ -23,6 +23,12 @@ VersionSource = Literal["ai_generate", "user_ui", "chat", "qc", "undo", "legacy"
 _file_lock = threading.Lock()
 # Default parent: the latest version. ``None`` explicitly means "no parent".
 LATEST = object()
+
+
+def _use_db() -> bool:
+    # Versions live wherever the job store keeps jobs.
+    from app import jobs
+    return jobs.DB_AVAILABLE
 
 
 def _now() -> datetime:
@@ -84,7 +90,7 @@ def record_version(
     """
     row = {"version": 0, "parent_version": parent_version, "source": source,
            "operations": operations or [], "plan": plan, "created_at": _now().isoformat()}
-    if not DB_AVAILABLE:
+    if not _use_db():
         return _file_record(job, row)["version"]
 
     from app.jobs import _await_db
@@ -104,7 +110,7 @@ def record_version(
 
 
 def list_versions(job: "Job", include_plan: bool = False) -> list[dict]:
-    if not DB_AVAILABLE:
+    if not _use_db():
         return [_row(r, include_plan) for r in _file_versions(job)]
 
     from app.jobs import _await_db

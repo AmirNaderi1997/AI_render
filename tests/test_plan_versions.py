@@ -24,7 +24,6 @@ def store(tmp_path, monkeypatch):
     """A job store with no database (file fallback) and no media probing."""
     from app import jobs, plan_versions
     monkeypatch.setattr(jobs, "DB_AVAILABLE", False)
-    monkeypatch.setattr(plan_versions, "DB_AVAILABLE", False)
 
     def no_media(data, base_dir=None, check_media=True):
         return schema.validate_plan(data, base_dir=base_dir, check_media=False)
