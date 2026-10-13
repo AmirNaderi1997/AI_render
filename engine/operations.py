@@ -574,3 +574,101 @@ def _shift_events(plan: dict, t0: float, t1: float, removed: float) -> None:
     if plan.get("poster"):
         t = at(plan["poster"].get("frame_time", 1.0))
         plan["poster"]["frame_time"] = round(min(t, max(0.0, new_duration - min_len)), 3)
+
+
+# ---------------------------------------------------------------------------
+# Locks across regeneration
+# ---------------------------------------------------------------------------
+# A regenerated plan has new segments and a new output timeline, so locked
+# items are carried by their *source* time and re-anchored onto the new plan.
+
+def _to_source(spans: list[SegmentSpan], t: float, end: bool = False) -> Optional[float]:
+    for s in spans:
+        if (s.start <= t < s.end) or (end and s.start < t <= s.end + FRAME_EPS):
+            return round(s.source_in + (t - s.start), 3)
+    return None
+
+
+def _to_output(spans: list[SegmentSpan], src: float) -> Optional[float]:
+    for s in spans:
+        if s.source_in - FRAME_EPS <= src <= s.source_out + FRAME_EPS:
+            return round(s.start + (src - s.source_in), 3)
+    return None
+
+
+def _anchor(spans, start: float, end: float) -> dict:
+    return {"source_start": _to_source(spans, start), "source_end": _to_source(spans, end, end=True)}
+
+
+def _reanchor(spans, anchor: dict) -> Optional[tuple[float, float]]:
+    if anchor.get("source_start") is None or anchor.get("source_end") is None:
+        return None
+    start, end = _to_output(spans, anchor["source_start"]), _to_output(spans, anchor["source_end"])
+    if start is None or end is None or end <= start:
+        return None
+    return start, end
+
+
+def extract_locked(plan: Optional[dict]) -> dict:
+    """Locked effects, captions and music of a plan, anchored to source time."""
+    if not plan:
+        return {}
+    spans = segment_spans(plan)
+    by_id = {s["id"]: s for s in plan.get("segments") or []}
+    effects = [{"effect": dict(e), "source_in": by_id[e["segment_id"]]["in"],
+                "source_out": by_id[e["segment_id"]]["out"]}
+               for e in plan.get("visual_effects") or [] if e.get("locked") and e.get("segment_id") in by_id]
+    captions = [{"caption": dict(c), **_anchor(spans, c["start"], c["end"])}
+                for c in plan.get("captions") or [] if c.get("locked")]
+    music = None
+    if (plan.get("music") or {}).get("locked"):
+        music = {"music": copy.deepcopy(plan["music"]),
+                 "duck": [_anchor(spans, d["start"], d["end"]) for d in plan["music"].get("duck") or []]}
+    locked = {"effects": effects, "captions": captions, "music": music}
+    return locked if effects or captions or music else {}
+
+
+def merge_locked(plan: dict, locked: Optional[dict]) -> list[str]:
+    """Re-apply locked items onto a freshly generated plan, in place.
+
+    Returns human-readable notes for locked items that no longer fit (their
+    source footage was cut from the new plan).
+    """
+    if not locked:
+        return []
+    dropped: list[str] = []
+    spans = segment_spans(plan)
+
+    for item in locked.get("effects") or []:
+        best, best_overlap = None, 0.0
+        for seg in plan.get("segments") or []:
+            overlap = min(seg["out"], item["source_out"]) - max(seg["in"], item["source_in"])
+            if overlap > best_overlap:
+                best, best_overlap = seg, overlap
+        if best is None or best_overlap < 0.5 * min(best["out"] - best["in"],
+                                                     item["source_out"] - item["source_in"]):
+            dropped.append(f"locked effect {item['effect']['type']} (source {item['source_in']}s)")
+            continue
+        effects = [e for e in plan.get("visual_effects") or [] if e.get("segment_id") != best["id"]]
+        effects.append({**item["effect"], "segment_id": best["id"], "locked": True})
+        plan["visual_effects"] = effects
+
+    for item in locked.get("captions") or []:
+        r = _reanchor(spans, item)
+        if r is None:
+            dropped.append(f"locked caption {item['caption']['text']!r}")
+            continue
+        captions = [c for c in plan.get("captions") or [] if c.get("locked") or not _overlaps(c["start"], c["end"], *r)]
+        captions.append({**item["caption"], "start": r[0], "end": r[1], "locked": True})
+        plan["captions"] = sorted(captions, key=lambda c: c["start"])
+
+    if locked.get("music"):
+        music = locked["music"]["music"]
+        duck = []
+        for d, anchor in zip(music.get("duck") or [], locked["music"]["duck"]):
+            r = _reanchor(spans, anchor)
+            if r:
+                duck.append({**d, "start": r[0], "end": r[1]})
+        music["duck"] = duck
+        plan["music"] = music
+    return dropped

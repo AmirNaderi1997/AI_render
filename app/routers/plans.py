@@ -28,6 +28,52 @@ def put_plan(job_id: str, body: PlanBody, request: Request, db: AsyncSession = D
     return {"ok": True}
 
 
+class OperationsBody(BaseModel):
+    operations: list[dict]
+    dry_run: bool = False
+    # Reject the batch if the plan moved past this version (optimistic locking).
+    base_version: Optional[int] = None
+    # Who is editing: user edits may change locked items, chat edits may not.
+    source: Literal["user_ui", "chat"] = "user_ui"
+
+
+@router.post("/{job_id}/operations", dependencies=[Depends(require_job_access)])
+def post_operations(job_id: str, body: OperationsBody, request: Request):
+    from pydantic import ValidationError
+    from engine.operations import LockedError, OperationError
+    job = get_job_for_request(request, job_id)
+    try:
+        return jobstore.apply_plan_operations(job, body.operations, source=body.source,
+                                              dry_run=body.dry_run, base_version=body.base_version)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValidationError as exc:
+        return JSONResponse({"ok": False, "errors": [e["msg"] for e in exc.errors()]}, status_code=422)
+    except LockedError as exc:
+        return JSONResponse({"ok": False, "errors": [str(exc)], "index": exc.index}, status_code=423)
+    except OperationError as exc:
+        return JSONResponse({"ok": False, "errors": [str(exc)], "index": exc.index}, status_code=422)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/{job_id}/plan/versions", dependencies=[Depends(require_job_access)])
+def get_plan_versions(job_id: str, request: Request):
+    from app import plan_versions
+    job = get_job_for_request(request, job_id)
+    versions = plan_versions.list_versions(job)
+    return {"current": versions[-1]["version"] if versions else None, "versions": versions}
+
+
+@router.post("/{job_id}/plan/undo", dependencies=[Depends(require_job_access)])
+def undo_plan(job_id: str, request: Request):
+    job = get_job_for_request(request, job_id)
+    try:
+        return jobstore.undo_plan(job)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/{job_id}/validate")
 def validate(job_id: str, body: PlanBody, request: Request):
     job = get_job_for_request(request, job_id)
