@@ -155,9 +155,12 @@ class TestPatchProducesValidPlan:
             suggested_fix="add_zoom_effect",
         )]
         patched, changes = patch_plan(plan_data, issues)
-        seg = next(s for s in patched["segments"] if s["id"] == "s1")
-        assert seg["zoom"]["to"] > 1.0
+        # The renderer ignores legacy segment.zoom when a visual effect exists,
+        # so QC sets a zoom effect rather than editing segment.zoom.
+        effect = next(e for e in patched["visual_effects"] if e["segment_id"] == "s1")
+        assert effect["type"] == "slow_push__neutral"
         assert len(changes) == 1
+        assert changes[0]["operation"]["op"] == "set_effect"
 
 
 class TestMaxRoundsEnforced:

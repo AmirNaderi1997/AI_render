@@ -53,6 +53,8 @@ class Segment(BaseModel):
 class VisualEffect(BaseModel):
     segment_id: str
     type: str
+    # User-pinned choices survive regeneration and automatic QC patches.
+    locked: bool = False
 
     @field_validator("type")
     @classmethod
@@ -120,6 +122,7 @@ class Caption(BaseModel):
     # A single exact word or short phrase from the caption to accent in the
     # rich subtitle renderer. None keeps the caption as a single colour.
     highlighted_word: Optional[str] = None
+    locked: bool = False
 
     @model_validator(mode="after")
     def _check(self):
@@ -207,6 +210,7 @@ class Music(BaseModel):
     file: str = Field(min_length=1)
     volume_db: float = Field(default=-14, ge=-80.0, le=12.0, allow_inf_nan=False)
     duck: List[DuckRange] = []
+    locked: bool = False
 
 
 class Sfx(BaseModel):

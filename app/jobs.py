@@ -26,6 +26,7 @@ from engine.captions import load_style
 from engine.premiere import AttachedMusic, build_premiere
 from engine.render import render as run_render, export_poster, embed_poster
 from engine.schema import validate_plan
+from app import plan_versions
 
 
 JOBS_ROOT = Path(settings.JOBS_DIR).expanduser()
@@ -369,14 +370,96 @@ def save_music(job: Job, filename: str, src) -> Path:
     return dst
 
 
-def save_plan(job: Job, data: dict) -> tuple[Optional[dict], list[str]]:
-    """Validate and persist a plan. Returns (plan_dict, errors)."""
+def save_plan(
+    job: Job,
+    data: dict,
+    *,
+    source: str = "user_ui",
+    operations: Optional[list] = None,
+    parent_version: Optional[int] | object = plan_versions.LATEST,
+) -> tuple[Optional[dict], list[str]]:
+    """Validate and persist a plan as a new version. Returns (plan_dict, errors)."""
     plan, errs = validate_plan(data, base_dir=job.dir, check_media=True)
     if errs:
         return None, errs
+    _ensure_baseline_version(job)
     job.plan_data = data
     _write_status(job)
+    plan_versions.record_version(job, data, source, operations, parent_version)
     return data, []
+
+
+def _ensure_baseline_version(job: Job) -> None:
+    """Plans saved before versioning existed get a 'legacy' v1 so undo can reach them."""
+    if job.plan_data is not None and not plan_versions.list_versions(job):
+        plan_versions.record_version(job, job.plan_data, "legacy")
+
+
+def _guard_plan_edit(job: Job) -> None:
+    if job.generate.status == "running":
+        raise ValueError("wait for plan generation to finish")
+
+
+def apply_plan_operations(
+    job: Job,
+    operations: list,
+    *,
+    source: str = "user_ui",
+    dry_run: bool = False,
+    base_version: Optional[int] = None,
+) -> dict:
+    """Apply a batch of EditOperations to the job's plan.
+
+    User edits may change locked items; chat and QC edits may not. With
+    ``dry_run`` nothing is saved and the diff is returned. ``base_version``
+    rejects the batch if the plan changed since the caller last read it.
+    Raises ValueError (conflict/state) or engine.operations.OperationError.
+    """
+    from engine.operations import OpContext, apply_operations
+
+    _guard_plan_edit(job)
+    current = load_plan(job)
+    latest = plan_versions.latest_version(job)
+    current_version = latest["version"] if latest else None
+    if base_version is not None and current_version is not None and base_version != current_version:
+        raise PlanVersionConflict(f"plan is at version {current_version}, not {base_version}")
+    ctx = OpContext(actor="user" if source == "user_ui" else "ai", respect_locks=source != "user_ui")
+    result = apply_operations(current, operations, ctx, base_dir=job.dir, check_media=True)
+    response = {"ok": True, "dry_run": dry_run, "diff": result.diff, "operations": result.operations,
+                "plan": result.plan, "version": current_version}
+    if not dry_run:
+        _, errors = save_plan(job, result.plan, source=source, operations=result.operations)
+        if errors:  # validated above; only a media file vanishing could get here
+            raise ValueError("; ".join(errors))
+        response["version"] = plan_versions.latest_version(job)["version"]
+    return response
+
+
+def undo_plan(job: Job) -> dict:
+    """Restore the parent of the latest version, recorded as a new 'undo' version.
+
+    The undo version's parent is the restored version's parent, so repeated
+    undos keep walking back through history.
+    """
+    _guard_plan_edit(job)
+    latest = plan_versions.latest_version(job)
+    if latest is None or latest.get("parent_version") is None:
+        raise ValueError("nothing to undo")
+    target = plan_versions.get_version(job, latest["parent_version"])
+    if target is None:
+        raise ValueError(f"version {latest['parent_version']} not found")
+    _, errors = save_plan(job, target["plan"], source="undo",
+                          operations=[{"op": "undo", "from_version": latest["version"],
+                                       "restored_version": target["version"]}],
+                          parent_version=target.get("parent_version"))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return {"ok": True, "version": plan_versions.latest_version(job)["version"],
+            "restored_version": target["version"], "plan": target["plan"]}
+
+
+class PlanVersionConflict(ValueError):
+    pass
 
 
 def load_plan(job: Job) -> dict:
@@ -597,8 +680,11 @@ def start_generate(
         if job.generate.status == "running":
             return
         locked_transitions: list[dict] = []
+        locked_items: dict = {}
         if job.plan_data:
+            from engine.operations import extract_locked
             locked_transitions = [dict(item) for item in job.plan_data.get("transitions", []) if item.get("locked")]
+            locked_items = extract_locked(job.plan_data)
         style_ref = None
         style_profile = None
         if style_id:
@@ -638,6 +724,7 @@ def start_generate(
             "caption_font": caption_font,
             "caption_font_id": caption_font_id,
             "locked_transitions": locked_transitions,
+            "locked_items": locked_items,
             "output_kind": output_kind,
             "transition_style": transition_style,
             "transition_request": transition_request,
@@ -655,7 +742,7 @@ def start_generate(
             args=(job, style, instruction, whisper_model, language, use_saved_transcript,
                   transcribe_only, transcription_hint, asr_engine, caption_font, caption_font_id,
                   locked_transitions, output_kind, transition_style, transition_request,
-                  style_profile, style_ref),
+                  style_profile, style_ref, locked_items),
             daemon=True,
         ).start()
 
@@ -678,6 +765,7 @@ def _run_generate(
     transition_request: str = "",
     style_profile: Optional[dict] = None,
     style_ref: Optional[dict] = None,
+    locked_items: Optional[dict] = None,
     *,
     raise_errors: bool = False,
 ) -> None:
@@ -750,6 +838,8 @@ def _run_generate(
                 transition_style, transition_request, style_ref,
                 fallback_reason,
             )
+            _restore_locked(plan_data, locked_items)
+            _ensure_baseline_version(job)
             job.plan_data = plan_data
             job.generate.status = "done"
             job.generate.stage = ""
@@ -765,6 +855,7 @@ def _run_generate(
             job.generate.model = "local_template"
             job.generate.finished_at = time.time()
             _write_status(job)
+            plan_versions.record_version(job, plan_data, "ai_generate")
             return
 
         # 4. Detect pauses
@@ -836,6 +927,8 @@ def _run_generate(
         job.generate.message = "validating plan…"
         _write_status(job)
 
+        _restore_locked(plan_data, locked_items)
+        _ensure_baseline_version(job)
         job.plan_data = plan_data
 
         job.generate.status = "done"
@@ -847,6 +940,7 @@ def _run_generate(
         job.generate.model = usage.model
         job.generate.finished_at = time.time()
         _write_status(job)
+        plan_versions.record_version(job, plan_data, "ai_generate")
 
     except Exception as e:
         job.generate.status = "error"
@@ -855,6 +949,28 @@ def _run_generate(
         _write_status(job)
         if raise_errors:
             raise
+
+
+def _restore_locked(plan_data: dict, locked_items: Optional[dict]) -> None:
+    """Carry user-locked effects/captions/music into a regenerated plan.
+
+    Falls back to the plain generated plan if re-anchoring makes it invalid.
+    """
+    if not locked_items:
+        return
+    from engine.operations import merge_locked
+    import copy as _copy
+    candidate = _copy.deepcopy(plan_data)
+    dropped = merge_locked(candidate, locked_items)
+    _, errors = validate_plan(candidate, check_media=False)
+    if errors:
+        dropped = [f"all locked items (re-anchoring failed: {'; '.join(errors)[:200]})"]
+    else:
+        plan_data.clear()
+        plan_data.update(candidate)
+    if dropped:
+        plan_data.setdefault("generation_meta", {})
+        plan_data["generation_meta"] = {**(plan_data["generation_meta"] or {}), "dropped_locks": dropped}
 
 
 def _local_plan(job, transcript, style, output_kind, caption_font, caption_font_id,
@@ -1115,5 +1231,6 @@ def apply_qc_fixes(job: Job, issue_indices: list[int] | None = None) -> tuple[di
 
     patched, changes = get_patched_plan(job.dir, plan_data, issues)
     if changes:
-        save_plan(job, patched)
+        save_plan(job, patched, source="qc",
+                  operations=[c["operation"] for c in changes if c.get("operation")])
     return patched, changes
