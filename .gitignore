@@ -34,3 +34,7 @@ assets/effect_previews/
 backups/
 nginx/certs/
 /certs/
+
+# Excluded from GitHub (large media kept local only)
+raw/MYVIDEO.mp4
+assets/sfx/YTDown.com_YouTube_Parham-Potki-x-MMV-x-PanizPRZ-Jan-Fadaye_Media_9XiY4HjXknY_006_128k.m4a
