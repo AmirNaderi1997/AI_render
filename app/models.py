@@ -61,6 +61,23 @@ class Plan(Base):
     data: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class PlanVersion(Base):
+    """Immutable snapshot of a job's plan after each change (undo history)."""
+
+    __tablename__ = "plan_versions"
+    __table_args__ = (UniqueConstraint("job_id", "version", name="uq_plan_versions_job_version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    parent_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # ai_generate | user_ui | chat | qc | undo | legacy
+    source: Mapped[str] = mapped_column(String(32))
+    operations: Mapped[list] = mapped_column(JSON, default=list)
+    plan: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class RenderResult(Base):
     __tablename__ = "render_results"
 
