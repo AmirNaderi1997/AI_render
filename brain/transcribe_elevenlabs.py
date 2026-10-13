@@ -20,6 +20,21 @@ SCRIBE_MODEL = "scribe_v2"
 SCRIBE_FALLBACK_MODEL = "scribe_v1"
 # $0.40 per hour  →  per-second cost
 COST_PER_SECOND = 0.40 / 3600
+_CONNECT_TIMEOUT = int(os.environ.get("ELEVENLABS_SCRIBE_CONNECT_TIMEOUT", "10"))
+_READ_TIMEOUT = int(os.environ.get("ELEVENLABS_SCRIBE_READ_TIMEOUT", "120"))
+
+# Markers of errors that will fail identically on an immediate retry: an
+# exhausted quota, or a rejected/forbidden key. These are surfaced right away
+# so the caller can fall back to the local Whisper engine without delay.
+_PERMANENT_ERROR_MARKERS = ("quota_exceeded", "quota", "status_code: 401", "status_code: 403")
+
+
+def _is_permanent_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (401, 403):
+        return True
+    return any(marker in text for marker in _PERMANENT_ERROR_MARKERS)
 
 
 def _normalize_persian(text: str) -> str:
@@ -131,8 +146,12 @@ def transcribe_elevenlabs(
 
     wav = _extract_audio(video, out_dir)
     try:
+        import httpx as _httpx
         from elevenlabs import ElevenLabs
-        client = ElevenLabs(api_key=api_key)
+        client = ElevenLabs(
+            api_key=api_key,
+            timeout=_httpx.Timeout(_READ_TIMEOUT, connect=_CONNECT_TIMEOUT),
+        )
 
         kwargs: dict = {
             "model_id": SCRIBE_MODEL,
@@ -149,19 +168,23 @@ def transcribe_elevenlabs(
             try:
                 resp = client.speech_to_text.convert(file=f, **kwargs)
             except Exception as first_err:
+                # Quota/auth failures are permanent for this request; retrying
+                # only burns another request cycle before the inevitable
+                # fallback to Whisper. Fail fast so the fallback engine starts
+                # sooner and the job does not sit in "generating plan" for
+                # minutes on a request that can never succeed.
+                if _is_permanent_error(first_err):
+                    raise RuntimeError(
+                        f"ElevenLabs API unavailable: {first_err}"
+                    ) from first_err
                 log.warning("scribe_v2 failed (%s), retrying once…", first_err)
                 f.seek(0)
                 try:
                     resp = client.speech_to_text.convert(file=f, **kwargs)
-                except Exception:
-                    kwargs["model_id"] = SCRIBE_FALLBACK_MODEL
-                    f.seek(0)
-                    try:
-                        resp = client.speech_to_text.convert(file=f, **kwargs)
-                    except Exception as fallback_err:
-                        raise RuntimeError(
-                            f"ElevenLabs API failed: {fallback_err}"
-                        ) from fallback_err
+                except Exception as retry_err:
+                    raise RuntimeError(
+                        f"ElevenLabs API failed: {retry_err}"
+                    ) from retry_err
         elapsed = time.monotonic() - t0
 
         duration = resp.audio_duration_secs if hasattr(resp, "audio_duration_secs") and resp.audio_duration_secs else 0.0

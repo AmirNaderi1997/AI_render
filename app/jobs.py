@@ -301,12 +301,40 @@ def rescan(root: Optional[Path] = None) -> int:
     """Refresh the process-local cache from PostgreSQL."""
     if DB_AVAILABLE:
         cleanup_orphaned_jobs()
+        _recover_stuck_jobs()
         return len(list_jobs())
-    # Non-production mode deliberately has no durable fallback. It is useful
-    # for isolated unit tests, but a restart cannot pretend file status is
-    # authoritative after the database migration.
     with _lock:
         return len(_jobs)
+
+
+def _recover_stuck_jobs() -> int:
+    """Mark jobs stuck in running/queued state as errors after a restart."""
+    if not DB_AVAILABLE:
+        return 0
+
+    async def recover() -> int:
+        assert AsyncSessionLocal is not None
+        async with AsyncSessionLocal() as db:
+            records = (await db.execute(
+                select(JobRecord).where(JobRecord.status.in_(["running", "queued"]))
+            )).scalars().all()
+            changed = 0
+            for record in records:
+                record.status = "error"
+                record.message = "Interrupted by server restart. Please try again."
+                state = record.state or {}
+                payload = state.get("job", state)
+                for key in ("generate", "render", "qc"):
+                    sub = payload.get(key)
+                    if isinstance(sub, dict) and sub.get("status") in ("running", "queued"):
+                        sub["status"] = "error"
+                        sub["message"] = "Interrupted by server restart"
+                record.state = {**state, "job": payload}
+                changed += 1
+            if changed:
+                await db.commit()
+            return changed
+    return _await_db(recover())
 
 
 def save_raw(job: Job, filename: str, src, *, expected_size: int | None = None) -> Path:
@@ -716,15 +744,25 @@ def _run_generate(
         # deployment without the optional local Whisper runtime should remain
         # able to produce a renderable plan; it simply has no subtitle track.
         if not transcript.get("words"):
+            fallback_reason = transcript.get("fallback_reason") or "no speech detected"
             plan_data = _local_plan(
                 job, transcript, style, output_kind, caption_font, caption_font_id,
                 transition_style, transition_request, style_ref,
-                transcript.get("fallback_reason", "no speech detected"),
+                fallback_reason,
             )
             job.plan_data = plan_data
             job.generate.status = "done"
             job.generate.stage = ""
-            job.generate.message = "plan generated without subtitles"
+            # Be explicit when the AI model was bypassed because transcription
+            # produced no words. A silent "plan generated without subtitles"
+            # hid the fact that no LLM ran; the user needs to see that so they
+            # can fix ASR (e.g. refill quota) and regenerate.
+            job.generate.asr_fallback_reason = str(fallback_reason)[:500]
+            job.generate.message = (
+                "plan built locally without the AI model — transcription produced "
+                "no words, so captions and AI edits were skipped"
+            )
+            job.generate.model = "local_template"
             job.generate.finished_at = time.time()
             _write_status(job)
             return

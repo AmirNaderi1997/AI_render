@@ -4,7 +4,7 @@ import { api, FontEntry, LibraryAsset, StyleProfile } from "./api";
 import { FontLibrary } from "./FontLibrary";
 import { StylePicker } from "./StyleLibrary";
 import { AuthenticatedMedia } from "./AuthenticatedMedia";
-import { friendlyError, JobWorkflow, NextStep } from "./ui";
+import { friendlyError, JobWorkflow, NextStep, notify } from "./ui";
 
 function fmtSize(n: number) {
   return n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : (n / 1e6).toFixed(1) + " MB";
@@ -42,12 +42,9 @@ export default function NewReel() {
   const [busy, setBusy] = React.useState(false);
   const [uploadPct, setUploadPct] = React.useState<number | null>(null);
   const [uploadFailed, setUploadFailed] = React.useState(false);
-  const [generating, setGenerating] = React.useState(false);
-  const [genStatus, setGenStatus] = React.useState<any>(null);
   const [err, setErr] = React.useState<string | null>(null);
   const [videoError, setVideoError] = React.useState("");
   const [over, setOver] = React.useState(false);
-  const [jobId, setJobId] = React.useState<string | null>(null);
   const uploadController = React.useRef<AbortController | null>(null);
   const planJsonError = React.useMemo(() => {
     if (!planText.trim() || planFile) return false;
@@ -97,28 +94,6 @@ export default function NewReel() {
     return () => { window.removeEventListener("dragover", stop); window.removeEventListener("drop", stop); };
   }, []);
 
-  React.useEffect(() => {
-    if (!generating || !jobId) return;
-    let inFlight = false;
-    const tick = () =>
-      {
-        if (inFlight) return;
-        inFlight = true;
-        api.generateStatus(jobId).then(s => {
-        setGenStatus(s);
-        if (s.status === "done") {
-          setGenerating(false);
-          nav(`/jobs/${jobId}`);
-        } else if (s.status === "error") {
-          setGenerating(false);
-          setErr(friendlyError(s.message, "generate the edit plan"));
-        }
-        }).catch(e => setErr(friendlyError(e, "check plan progress"))).finally(() => { inFlight = false; });
-      };
-    tick();
-    const iv = setInterval(tick, 1500);
-    return () => clearInterval(iv);
-  }, [generating, jobId, nav]);
 
   function pick(f?: File | null) {
     if (!f) return;
@@ -160,7 +135,6 @@ export default function NewReel() {
       }
       const { job, errors } = result;
       if (errors.length) setErr("Plan warnings: " + errors.join("; "));
-      setJobId(job.id);
       await uploadMusicToJob(job.id);
       nav(`/jobs/${job.id}`);
     } catch (e: any) {
@@ -186,7 +160,11 @@ export default function NewReel() {
         setUploadPct(null);
       }
       const { job } = result;
-      setJobId(job.id);
+      // The upload is done, but the plan task has not been requested yet
+      // (music upload + generate request + navigation still ahead). Give the
+      // user a visible signal for that gap so the screen never looks frozen
+      // between "upload 100%" and the "Generating plan…" view.
+      notify("Upload complete — starting plan generation…");
       await uploadMusicToJob(job.id);
       await api.generatePlan(job.id, {
         style, instruction: instruction.trim(), whisper_model: whisperModel,
@@ -201,7 +179,7 @@ export default function NewReel() {
         transition_style: transitionStyle,
         transition_request: transitionRequest.trim(),
       });
-      setGenerating(true);
+      nav(`/jobs/${job.id}`);
     } catch (e: any) {
       setErr(friendlyError(e, "start plan generation"));
     } finally { setBusy(false); }
@@ -297,12 +275,13 @@ export default function NewReel() {
             </label>
             <label>ASR engine
               <select value={asrEngine} onChange={e => setAsrEngine(e.target.value)}>
-                <option value="auto">Auto (best available)</option>
+                <option value="auto">Auto (ElevenLabs → Sarovi → Whisper)</option>
                 <option value="elevenlabs">ElevenLabs (best Persian)</option>
+                <option value="sarovi">Sarovi (hosted Whisper, approx. timing)</option>
                 <option value="whisper">Whisper (offline)</option>
               </select>
             </label>
-            {asrEngine !== "elevenlabs" && <label>Whisper model
+            {(asrEngine === "whisper" || asrEngine === "auto") && <label>Whisper model
               <select value={whisperModel} onChange={e => setWhisperModel(e.target.value)}>
                 <option value="base">base (default, faster download)</option>
                 <option value="medium">medium (higher accuracy)</option>
@@ -418,41 +397,12 @@ export default function NewReel() {
           <span className="muted">Step 4</span>
         </div>
         <div className="row" style={{ gap: 12, alignItems: "center", marginBottom: 16 }}>
-          <button onClick={onGenerate} disabled={busy || generating || planStyleLoading || !video} title={planStyleLoading ? "Loading your saved plan style…" : (busy || generating || !video) ? "Choose a video and complete the required plan fields first." : undefined}>
-            {generating ? "Generating..." : uploadFailed ? "Retry upload" : "Generate Edit Plan"}
+          <button onClick={onGenerate} disabled={busy || planStyleLoading || !video} title={planStyleLoading ? "Loading your saved plan style…" : (busy || !video) ? "Choose a video and complete the required plan fields first." : undefined}>
+            {busy ? "Uploading..." : uploadFailed ? "Retry upload" : "Generate Edit Plan"}
           </button>
           <span className="muted">or upload a manual plan.json</span>
         </div>
 
-        {generating && genStatus && (
-          <div style={{
-            padding: "14px 18px",
-            background: "var(--accent-soft)",
-            borderRadius: "var(--radius-md)",
-            border: "1px solid rgba(99,102,241,0.15)",
-            marginBottom: 16
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-              <span className="generating-pulse" style={{
-                width: 8, height: 8, borderRadius: "50%", background: "var(--accent)"
-              }} />
-              <span style={{ fontWeight: 600 }}>Stage: {genStatus.stage || "starting"}</span>
-            </div>
-            <div className="muted">{genStatus.message}</div>
-            {genStatus.asr_engine && (
-              <div className="muted" style={{ marginTop: 6 }}>
-                ASR: {genStatus.asr_engine}
-                {genStatus.asr_audio_seconds > 0 && ` · ${genStatus.asr_audio_seconds.toFixed(1)}s audio`}
-                {genStatus.asr_cost_usd > 0 && ` · $${genStatus.asr_cost_usd.toFixed(4)}`}
-              </div>
-            )}
-            {genStatus.asr_fallback_reason && (
-              <div className="errors" role="status" style={{ marginTop: 6 }}>
-                {genStatus.asr_fallback_reason}
-              </div>
-            )}
-          </div>
-        )}
 
         <div>
           <input type="file" aria-label="Upload a plan JSON file" accept="application/json" onChange={e => setPlanFile(e.target.files?.[0] || null)} />

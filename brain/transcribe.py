@@ -58,19 +58,31 @@ class _whisper_timeout:
 
 
 def _whisper_timeout_seconds() -> int:
-    raw = os.environ.get("WHISPER_TIMEOUT_SECONDS", "120")
+    # The first transcription on a fresh machine also downloads the model, so
+    # the default must cover download + decode. 120s was too short for that
+    # cold path and caused empty transcripts (and therefore AI-free plans)
+    # whenever Whisper was the fallback engine.
+    raw = os.environ.get("WHISPER_TIMEOUT_SECONDS", "600")
     try:
         return max(1, int(raw))
     except ValueError:
-        log.warning("invalid WHISPER_TIMEOUT_SECONDS=%r; using 120 seconds", raw)
-        return 120
+        log.warning("invalid WHISPER_TIMEOUT_SECONDS=%r; using 600 seconds", raw)
+        return 600
+
+
+def _sarovi_stt_enabled() -> bool:
+    """Sarovi hosted-Whisper fallback is on when a key is set and not disabled."""
+    flag = os.environ.get("SAROVI_STT_ENABLED", "true").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return bool(os.environ.get("SAROVI_API_KEY", "").strip())
 
 
 def choose_engine(language: Optional[str] = None, explicit: Optional[str] = None) -> str:
-    if explicit and explicit in ("elevenlabs", "whisper"):
+    if explicit and explicit in ("elevenlabs", "sarovi", "whisper"):
         return explicit
     env = os.environ.get("ASR_ENGINE", "").lower()
-    if env in ("elevenlabs", "whisper"):
+    if env in ("elevenlabs", "sarovi", "whisper"):
         return env
     if (language or "").lower() == "fa" and os.environ.get("ELEVENLABS_API_KEY"):
         return "elevenlabs"
@@ -487,9 +499,46 @@ def transcribe(
 
             return effective_transcript(out_dir)
         except Exception as exc:
-            log.warning("ElevenLabs failed (%s), falling back to whisper", exc)
+            log.warning("ElevenLabs failed (%s), trying Sarovi hosted whisper", exc)
             elevenlabs_error = exc
-            selected_engine = "whisper"
+            selected_engine = "sarovi"
+
+    # Sarovi hosted Whisper sits between ElevenLabs and the local engine: it is
+    # reached when explicitly selected, or as the first fallback after
+    # ElevenLabs fails (commonly an exhausted credit balance). It needs no local
+    # model download, so it is faster and steadier than cold local Whisper.
+    sarovi_error: Optional[Exception] = None
+    if (selected_engine == "sarovi" or elevenlabs_error is not None) and _sarovi_stt_enabled():
+        from brain.transcribe_sarovi import transcribe_sarovi
+        try:
+            log.info("transcribing %s (sarovi hosted whisper) …", video.name)
+            transcript, asr_cost = transcribe_sarovi(
+                video, out_dir,
+                language=language,
+                file_digest=fhash,
+                keyterms=keyterms or hotwords,
+            )
+            if elevenlabs_error is not None:
+                transcript = {
+                    **transcript,
+                    "fallback_from": "elevenlabs",
+                    "fallback_reason": f"ElevenLabs unavailable: {elevenlabs_error}"[:500],
+                }
+            _archive_current(out_dir)
+            transcript_path.write_text(json.dumps(transcript, indent=2, ensure_ascii=False))
+
+            cost_path = out_dir / "asr_cost.json"
+            cost_path.write_text(json.dumps({
+                "engine": "sarovi",
+                "audio_seconds": transcript.get("duration", 0),
+                "cost_usd": asr_cost,
+            }, indent=2))
+
+            return effective_transcript(out_dir)
+        except Exception as exc:
+            log.warning("Sarovi transcription failed (%s), falling back to local whisper", exc)
+            sarovi_error = exc
+    selected_engine = "whisper"
 
     if os.environ.get("WHISPER_ENABLED", "true").strip().lower() in {"0", "false", "no", "off"}:
         model_size = model_size or os.environ.get("WHISPER_MODEL_SIZE") or os.environ.get("WHISPER_MODEL") or _DEFAULT_MODEL
@@ -516,29 +565,32 @@ def transcribe(
                 device, compute_type, initial_prompt, hotwords,
             )
         except Exception as whisper_error:
-            if elevenlabs_error is not None:
-                raise RuntimeError(
-                    "ElevenLabs transcription failed "
-                    f"({type(elevenlabs_error).__name__}: {elevenlabs_error}); "
-                    "Whisper fallback also failed "
-                    f"({type(whisper_error).__name__}: {whisper_error})"
-                ) from whisper_error
+            if elevenlabs_error is not None or sarovi_error is not None:
+                chain = []
+                if elevenlabs_error is not None:
+                    chain.append(f"ElevenLabs failed ({type(elevenlabs_error).__name__}: {elevenlabs_error})")
+                if sarovi_error is not None:
+                    chain.append(f"Sarovi failed ({type(sarovi_error).__name__}: {sarovi_error})")
+                chain.append(f"Whisper fallback also failed ({type(whisper_error).__name__}: {whisper_error})")
+                raise RuntimeError("; ".join(chain)) from whisper_error
             raise
 
-    if elevenlabs_error is not None:
-        # Preserve the actual engine and the reason an explicitly requested
-        # provider was not used. This prevents a successful Whisper fallback
-        # from being presented as an ElevenLabs result.
+    if elevenlabs_error is not None or sarovi_error is not None:
+        # Preserve the actual engine and the reason the preferred providers were
+        # not used. This prevents a successful Whisper fallback from being
+        # presented as an ElevenLabs/Sarovi result.
         whisper_reason = str(result.get("fallback_reason") or "").strip()
-        provider_reason = f"ElevenLabs unavailable: {elevenlabs_error}"
-        fallback_reason = (
-            f"{provider_reason}; Whisper fallback: {whisper_reason}"
-            if whisper_reason else provider_reason
-        )
+        reasons = []
+        if elevenlabs_error is not None:
+            reasons.append(f"ElevenLabs unavailable: {elevenlabs_error}")
+        if sarovi_error is not None:
+            reasons.append(f"Sarovi unavailable: {sarovi_error}")
+        if whisper_reason:
+            reasons.append(f"Whisper fallback: {whisper_reason}")
         result = {
             **result,
-            "fallback_from": "elevenlabs",
-            "fallback_reason": fallback_reason[:500],
+            "fallback_from": "elevenlabs" if elevenlabs_error is not None else "sarovi",
+            "fallback_reason": "; ".join(reasons)[:500],
         }
         transcript_path.write_text(json.dumps(result, indent=2, ensure_ascii=False))
 
