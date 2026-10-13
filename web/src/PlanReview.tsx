@@ -51,6 +51,8 @@ export default function PlanReview() {
   const renderedRef = React.useRef<HTMLVideoElement>(null);
   const currentJobId = React.useRef(id);
   currentJobId.current = id;
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   React.useEffect(() => {
     if (!id) return;
@@ -87,6 +89,25 @@ export default function PlanReview() {
     return () => { active = false; controller.abort(); };
   }, [id]);
 
+  // Refreshes plan data once generation finishes. This must not share the poll
+  // effect's AbortController: setting genStatus to "done" re-runs that effect and
+  // its cleanup aborts in-flight requests, so the plan silently never loaded.
+  const refreshGeneratedPlan = (jobId: string) => {
+    const stillHere = () => mountedRef.current && currentJobId.current === jobId;
+    api.getJob(jobId).then(j => {
+      if (!stillHere()) return;
+      setJob(j);
+      if (j.plan) {
+        setPlanText(JSON.stringify(j.plan, null, 2));
+        setSavedPlanText(JSON.stringify(j.plan));
+        api.premiereReport(jobId).then(report => { if (stillHere()) setPremiereManifest(report); })
+          .catch(e => { if (stillHere()) appendDetailError(setDetailErrors, e, "load Premiere compatibility"); });
+      }
+    }).catch(e => { if (stillHere()) appendDetailError(setDetailErrors, e, "load the updated job"); });
+    api.getTranscript(jobId).then(t => { if (stillHere()) { setTranscript(t); setWordEdits({}); } }).catch(e => { if (stillHere()) appendDetailError(setDetailErrors, e, "load the updated transcript"); });
+    api.getCorrections(jobId).then(items => { if (stillHere()) setCorrections(items); }).catch(e => { if (stillHere()) appendDetailError(setDetailErrors, e, "load speech suggestions"); });
+  };
+
   React.useEffect(() => {
     if (!id || genStatus?.status !== "running") return;
     const controller = new AbortController();
@@ -99,22 +120,7 @@ export default function PlanReview() {
       api.generateStatus(id, controller.signal).then(s => {
         if (!isCurrent()) return;
         setGenStatus(s);
-        if (s.status === "done") {
-          api.getJob(id, controller.signal).then(j => {
-            if (!isCurrent()) return;
-            setJob(j);
-            if (j.plan) {
-              setPlanText(JSON.stringify(j.plan, null, 2));
-              setSavedPlanText(JSON.stringify(j.plan));
-            }
-          }).catch(e => {
-            if (isCurrent()) {
-              appendDetailError(setDetailErrors, e, "load the updated job");
-            }
-          });
-          api.getTranscript(id, controller.signal).then(t => { if (isCurrent()) { setTranscript(t); setWordEdits({}); } }).catch(e => { if (isCurrent()) appendDetailError(setDetailErrors, e, "load the updated transcript"); });
-          api.getCorrections(id, controller.signal).then(items => { if (isCurrent()) setCorrections(items); }).catch(e => { if (isCurrent()) appendDetailError(setDetailErrors, e, "load speech suggestions"); });
-        }
+        if (s.status === "done") refreshGeneratedPlan(id);
       }).catch(e => { if (isCurrent()) appendDetailError(setDetailErrors, e, "check plan progress"); }).finally(() => { inFlight = false; });
     }, 1500);
     return () => { active = false; clearInterval(iv); controller.abort(); };
